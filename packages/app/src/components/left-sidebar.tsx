@@ -416,6 +416,8 @@ function SidebarFooter({
   const settingsKeys = useShortcutKeys("toggle-settings");
   const openUsageScreen = useOpenUsageScreen();
 
+  if (process.env.EXPO_PUBLIC_LULU_STUDY === "1") return null;
+
   // One line of icons: Add project, Usage, Hosts, then Help and Settings at the end.
   return (
     <View style={styles.footerContainer} testID="sidebar-footer">
