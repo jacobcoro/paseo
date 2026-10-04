@@ -19,6 +19,7 @@ import { adminHtml } from "./admin.mjs";
 import { imageRecords, imageFile } from "./images.mjs";
 import { createLimits } from "./limits.mjs";
 import { installProxy } from "./proxy.mjs";
+import { mergeTranscript } from "./transcript.mjs";
 
 function reply(response, status, body, headers = {}) {
   response.writeHead(status, {
@@ -114,14 +115,17 @@ export async function startGateway(config) {
       });
       entries.unshift(...page.entries);
     }
+    const destination = join(config.recordsDir, `${student.id}.transcript.json`);
+    const saved = existsSync(destination) ? JSON.parse(readFileSync(destination, "utf8")) : null;
+    if (saved && (saved.studentId !== student.id || saved.agentId !== student.agentId))
+      throw new Error("Saved transcript belongs to another student or agent");
     const result = {
       studentId: student.id,
       agentId: student.agentId,
       model: config.model,
       mode: config.mode,
-      entries,
+      entries: mergeTranscript(saved?.entries || [], entries),
     };
-    const destination = join(config.recordsDir, `${student.id}.transcript.json`);
     writeFileSync(destination + ".tmp", JSON.stringify(result, null, 2), { mode: 0o600 });
     renameSync(destination + ".tmp", destination);
     return result;
