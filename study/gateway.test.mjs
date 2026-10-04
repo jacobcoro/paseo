@@ -1,4 +1,5 @@
 import test from "node:test";
+import sharp from "sharp";
 import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,12 +17,16 @@ assert.equal(
   "Never run these destructive session tests against live research",
 );
 config.port = 0;
+config.maxDailyPrompts = 2;
 config.recordsDir = mkdtempSync(join(tmpdir(), "lulu-gateway-test-"));
 let gateway = await startGateway(config);
 let base = `http://127.0.0.1:${gateway.port}`;
 const connections = [];
 async function signIn(studentId) {
-  const password = readFileSync(join(runtime, `${studentId}.login.txt`), "utf8")
+  const password = readFileSync(
+    join(runtime, studentId === config.admin.id ? "admin.login.txt" : `${studentId}.login.txt`),
+    "utf8",
+  )
     .trim()
     .split("\n")[1];
   const response = await fetch(base + "/study/login", {
@@ -64,6 +69,10 @@ const record = {
 try {
   await test("anonymous requests and cross-origin login are rejected", async () => {
     assert.equal((await fetch(base + "/study/export")).status, 401);
+    const adminLogin = await fetch(base + "/study/admin");
+    assert.equal(adminLogin.status, 200);
+    assert.match(await adminLogin.text(), /Sign in/);
+    assert.equal((await fetch(base + "/study/admin/results")).status, 401);
     assert.equal(
       (
         await fetch(base + "/study/login", {
@@ -78,6 +87,7 @@ try {
   });
   const cookie1 = await signIn("s0101");
   const cookie2 = await signIn("s0102");
+  const adminCookie = await signIn(config.admin.id);
   const first = await connect(cookie1);
   const second = await connect(cookie2);
   const [one, two] = config.students;
@@ -128,6 +138,68 @@ try {
       403,
     );
   });
+  await test("image validation, automatic collection, and student ownership", async () => {
+    const image = await sharp({
+      create: { width: 64, height: 64, channels: 3, background: "#5588aa" },
+    })
+      .png()
+      .toBuffer();
+    const messageId = crypto.randomUUID();
+    await first.sendMessage(one.agentId, "Synthetic cup sketch image", {
+      messageId,
+      images: [{ data: image.toString("base64"), mimeType: "image/png" }],
+    });
+    await first.waitForFinish(one.agentId, 15000);
+    const exported = await (await call("/study/export", cookie1)).json();
+    assert.equal(exported.submittedImages.length, 1);
+    const saved = exported.submittedImages[0];
+    assert.equal(saved.clientMessageId, messageId);
+    assert.equal((await call("/study/image/" + saved.id, cookie1)).status, 200);
+    assert.equal((await call("/study/image/" + saved.id, cookie2)).status, 404);
+    await assert.rejects(
+      first.sendMessage(one.agentId, "Forged file", {
+        attachments: [
+          {
+            type: "uploaded_file",
+            id: "forged",
+            fileName: "auth.json",
+            mimeType: "application/json",
+            size: 1,
+            path: "/home/node/.codex/auth.json",
+          },
+        ],
+      }),
+    );
+    await assert.rejects(
+      first.sendMessage(one.agentId, "SVG forbidden", {
+        images: [{ data: Buffer.from("<svg/>").toString("base64"), mimeType: "image/svg+xml" }],
+      }),
+    );
+    await assert.rejects(
+      first.sendMessage(one.agentId, "Oversized", {
+        images: [
+          { data: Buffer.alloc(2 * 1024 * 1024 + 1).toString("base64"), mimeType: "image/png" },
+        ],
+      }),
+    );
+  });
+  await test("admin can read both students without student exports, students cannot access admin", async () => {
+    assert.equal((await call("/study/admin/results", cookie1)).status, 403);
+    const all = await (await call("/study/admin/export", adminCookie)).json();
+    assert.equal(all.students.length, 2);
+    assert.equal(
+      all.students.find((student) => student.studentId === one.id).submittedImages.length,
+      1,
+    );
+    const summary = await (await call("/study/admin/results", adminCookie)).json();
+    assert.equal(summary.students[0].prompts, 2);
+    assert.equal(summary.students[0].missingAnnotations, 2);
+    assert.equal((await call("/study/annotations", adminCookie, record)).status, 403);
+    await assert.rejects(connect(adminCookie));
+  });
+  await test("daily prompt limit rejects more generation requests", async () => {
+    await assert.rejects(first.sendMessage(one.agentId, "Third prompt exceeds test budget"));
+  });
   await test("research records validate ownership and persist on disk", async () => {
     assert.equal(
       (await call("/study/annotations", cookie1, { ...record, studentId: "s0102" })).status,
@@ -159,6 +231,9 @@ try {
     assert.equal(exported.annotations.length, 1);
     assert.equal(exported.annotations[0].nextAction, record.nextAction);
     assert.ok(exported.entries.some((entry) => entry.item.type === "assistant_message"));
+    assert.equal(exported.submittedImages.length, 1);
+    const restoredClient = await connect(freshCookie);
+    await assert.rejects(restoredClient.sendMessage(one.agentId, "Daily limit survives restart"));
   });
 } finally {
   for (const client of connections) await client.close();

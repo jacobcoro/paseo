@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { validImages } from "./images.mjs";
 
 export const Annotation = z
   .object({
@@ -72,7 +73,7 @@ function validAction(request) {
   if (request.type === "send_agent_message_request") {
     if (typeof request.text !== "string" || request.text.length > 32000) return false;
     // Path-based attachments require their own ownership checks before enabling.
-    if (request.attachments?.length || request.images?.length) return false;
+    if (request.attachments?.length || !validImages(request.images)) return false;
   }
   return true;
 }

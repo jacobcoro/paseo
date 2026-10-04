@@ -1,3 +1,4 @@
+import { ensureAdmin } from "./admin-account.mjs";
 import { once } from "node:events";
 import { execFileSync } from "node:child_process";
 import { WebSocket } from "ws";
@@ -234,6 +235,7 @@ try {
     ),
     { mode: 0o600 },
   );
+  ensureAdmin(configPath);
 } catch (error) {
   for (const name of containers) {
     writeFileSync(

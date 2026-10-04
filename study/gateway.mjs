@@ -11,10 +11,14 @@ import {
   createReadStream,
 } from "node:fs";
 import { dirname, resolve, extname, join } from "node:path";
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocket } from "ws";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { Annotation, studentMessage } from "./policy.mjs";
+import { Annotation } from "./policy.mjs";
 import { loginHtml } from "./login.mjs";
+import { adminHtml } from "./admin.mjs";
+import { imageRecords, imageFile } from "./images.mjs";
+import { createLimits } from "./limits.mjs";
+import { installProxy } from "./proxy.mjs";
 
 function reply(response, status, body, headers = {}) {
   response.writeHead(status, {
@@ -44,7 +48,7 @@ function validPassword(password, student) {
 
 export async function startGateway(config) {
   const sessions = new Map();
-  const attempts = new Map();
+  const limits = createLimits(config);
   const students = new Map(config.students.map((student) => [student.id, student]));
   const clients = new Map();
   const socketPairs = new Set();
@@ -133,24 +137,25 @@ export async function startGateway(config) {
       : [];
   }
   async function handleLogin(request, response) {
-    const address = request.socket.remoteAddress;
-    const previous = attempts.get(address);
-    const attempt =
-      previous && previous.until > Date.now() ? previous : { count: 0, until: Date.now() + 60000 };
-    attempts.set(address, attempt);
-    if (++attempt.count > 20)
-      return reply(response, 429, { error: "Wait a minute before trying again" });
     const input = await jsonBody(request);
+    if (!limits.allow("login-total", 120) || !limits.allow("login:" + input.studentId, 10))
+      return reply(response, 429, { error: "Wait a minute before trying again" });
     const student = students.get(input.studentId);
-    if (!student || !validPassword(input.password, student))
+    const admin = config.admin?.id === input.studentId ? config.admin : null;
+    const account = student || admin;
+    if (!account || !validPassword(input.password, account))
       return reply(response, 401, { error: "Invalid login" });
     const token = randomBytes(32).toString("hex");
-    sessions.set(token, { studentId: student.id, expires: Date.now() + 6 * 3600000 });
+    sessions.set(token, {
+      studentId: account.id,
+      role: admin ? "admin" : "student",
+      expires: Date.now() + 6 * 3600000,
+    });
     const secure = request.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
     return reply(
       response,
       200,
-      { studentId: student.id },
+      { studentId: account.id, role: admin ? "admin" : "student" },
       {
         "Set-Cookie": `study_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=21600${secure}`,
       },
@@ -243,22 +248,77 @@ export async function startGateway(config) {
       {
         method: "GET",
         run: async (request, response, { student }) => {
-          const saved = await transcript(student);
-          return reply(
-            response,
-            200,
-            {
-              schemaVersion: 1,
-              exportedAt: new Date().toISOString(),
-              ...saved,
-              annotations: annotations(student),
-            },
-            { "Content-Disposition": `attachment; filename="${student.id}-research.json"` },
-          );
+          return reply(response, 200, await exportStudent(student), {
+            "Content-Disposition": `attachment; filename="${student.id}-research.json"`,
+          });
         },
       },
     ],
   ]);
+  async function exportStudent(student) {
+    return {
+      schemaVersion: 2,
+      exportedAt: new Date().toISOString(),
+      ...(await transcript(student)),
+      annotations: annotations(student),
+      submittedImages: imageRecords(config, student),
+    };
+  }
+  function serveImage(response, student, id) {
+    const file = imageFile(config, student, id);
+    if (!file) return reply(response, 404, { error: "Image not found" });
+    response.writeHead(200, {
+      "Content-Type": file.mimeType,
+      "Cache-Control": "private, no-store",
+    });
+    createReadStream(file.path).pipe(response);
+  }
+  async function adminRoute(pathname, request, response) {
+    if (request.method !== "GET") return reply(response, 405, { error: "Method not allowed" });
+    if (pathname === "/study/admin")
+      return reply(response, 200, adminHtml, { "Content-Type": "text/html; charset=utf-8" });
+    const selected = students.get(
+      new URL(request.url, "http://study.local").searchParams.get("studentId"),
+    );
+    if (pathname === "/study/admin/student" && selected)
+      return reply(response, 200, await exportStudent(selected));
+    if (pathname === "/study/admin/image" && selected)
+      return serveImage(
+        response,
+        selected,
+        new URL(request.url, "http://study.local").searchParams.get("id"),
+      );
+    if (pathname === "/study/admin/export")
+      return reply(
+        response,
+        200,
+        {
+          schemaVersion: 2,
+          students: await Promise.all([...students.values()].map(exportStudent)),
+        },
+        { "Content-Disposition": "attachment; filename=lulu-study-results.json" },
+      );
+    if (pathname !== "/study/admin/results") return reply(response, 404, { error: "Not found" });
+    const summaries = await Promise.all(
+      [...students.values()].map(async (student) => {
+        const saved = await transcript(student);
+        const prompts = saved.entries.filter((entry) => entry.item.type === "user_message");
+        const notes = annotations(student);
+        const annotated = new Set(notes.map((record) => record.promptId));
+        return {
+          studentId: student.id,
+          prompts: prompts.length,
+          annotations: notes.length,
+          images: imageRecords(config, student).length,
+          missingAnnotations: prompts.filter(
+            (entry) => !annotated.has(entry.item.messageId || String(entry.seqStart)),
+          ).length,
+          lastEventAt: saved.entries.at(-1)?.timestamp || null,
+        };
+      }),
+    );
+    return reply(response, 200, { mode: config.mode, students: summaries });
+  }
   function serveAsset(pathname, response, student) {
     const requested = resolve(config.webDir, "." + decodeURIComponent(pathname));
     if (!requested.startsWith(resolve(config.webDir) + "/") && requested !== resolve(config.webDir))
@@ -285,13 +345,41 @@ export async function startGateway(config) {
     if (extname(filename) === ".html") {
       const initialRoute = `/h/${student.serverId}/agent/${student.agentId}`;
       const bootstrap =
-        '<script>window.__PASEO_INITIAL_DAEMON_CONNECTION__={listen:window.location.hostname+":"+(window.location.port||(window.location.protocol==="https:"?"443":"80")),useTls:window.location.protocol==="https:"};if(["/","/welcome","/open-project"].includes(window.location.pathname))window.history.replaceState(null,"",' +
+        '<script>window.__PASEO_INITIAL_DAEMON_CONNECTION__={listen:window.location.hostname+":"+(window.location.port||(window.location.protocol==="https:"?"443":"80")),useTls:window.location.protocol==="https:"};if(["/","/welcome","/open-project","/new","/history","/settings"].includes(window.location.pathname))window.history.replaceState(null,"",' +
         JSON.stringify(initialRoute) +
         ")</script>";
       response.end(readFileSync(filename, "utf8").replace(/<\/head>/i, bootstrap + "</head>"));
       return;
     }
     createReadStream(filename).pipe(response);
+  }
+  async function handleAuthenticated(pathname, request, response, session) {
+    if (pathname.startsWith("/study/admin")) {
+      if (session.role !== "admin")
+        return reply(response, 403, { error: "Researcher access required" });
+      return await adminRoute(pathname, request, response);
+    }
+    if (session.role === "admin" && pathname !== "/study/logout")
+      return reply(response, 403, { error: "Use the researcher view" });
+    if (pathname.startsWith("/study/image/"))
+      return serveImage(response, session.student, pathname.slice("/study/image/".length));
+    const student = session.student;
+    const route = researchRoutes.get(pathname);
+    if (route) {
+      if (request.method !== route.method)
+        return reply(response, 405, { error: "Method not allowed" });
+      return await route.run(request, response, session);
+    }
+    if (pathname === "/api/health" && request.method === "GET") {
+      const origin = student.daemonUrl.replace("ws://", "http://").replace(/\/ws$/, "");
+      const upstream = await fetch(origin + "/api/health");
+      return reply(response, upstream.status, await upstream.text());
+    }
+    if (pathname.startsWith("/api/") || pathname.startsWith("/mcp") || pathname.startsWith("/."))
+      return reply(response, 403, { error: "Unavailable in the student study" });
+    if (request.method !== "GET") return reply(response, 405, { error: "Method not allowed" });
+    if (pathname.endsWith(".map")) return reply(response, 404, { error: "Not found" });
+    return serveAsset(pathname, response, student);
   }
   const server = createServer(async (request, response) => {
     response.setHeader("X-Content-Type-Options", "nosniff");
@@ -309,120 +397,31 @@ export async function startGateway(config) {
         return handleLogin(request, response);
       const session = authenticate(request);
       if (!session) {
+        if (pathname === "/study/admin" && request.method === "GET")
+          return reply(response, 200, loginHtml, { "Content-Type": "text/html; charset=utf-8" });
         if (pathname.startsWith("/study/") || pathname.startsWith("/api/"))
           return reply(response, 401, { error: "Sign in first" });
         return reply(response, 200, loginHtml, { "Content-Type": "text/html; charset=utf-8" });
       }
-      const student = session.student;
-      const route = researchRoutes.get(pathname);
-      if (route) {
-        if (request.method !== route.method)
-          return reply(response, 405, { error: "Method not allowed" });
-        return route.run(request, response, session);
-      }
-      if (pathname === "/api/health" && request.method === "GET") {
-        const origin = student.daemonUrl.replace("ws://", "http://").replace(/\/ws$/, "");
-        const upstream = await fetch(origin + "/api/health");
-        return reply(response, upstream.status, await upstream.text());
-      }
-      if (pathname.startsWith("/api/") || pathname.startsWith("/mcp") || pathname.startsWith("/."))
-        return reply(response, 403, { error: "Unavailable in the student study" });
-      if (request.method !== "GET") return reply(response, 405, { error: "Method not allowed" });
-      if (pathname.endsWith(".map")) return reply(response, 404, { error: "Not found" });
-      return serveAsset(pathname, response, student);
+      return await handleAuthenticated(pathname, request, response, session);
     } catch (error) {
       if (!response.headersSent)
         reply(response, 400, { error: "The request failed. Please retry." });
       console.error("Study request failed:", error.message);
     }
   });
-  const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 65536 });
-  server.on("upgrade", (request, socket, head) => {
-    const session = authenticate(request);
-    if (request.url !== "/ws" || !session || !checkOrigin(request)) {
-      socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
-      return;
-    }
-    websocketServer.handleUpgrade(request, socket, head, (browser) => {
-      const upstream = new WebSocket(session.student.daemonUrl, {
-        headers: { Authorization: `Bearer ${session.student.daemonPassword}` },
-      });
-      const pair = { browser, upstream, token: session.token };
-      socketPairs.add(pair);
-      const pending = [];
-      upstream.on("open", () => {
-        for (const frame of pending) upstream.send(frame);
-        pending.length = 0;
-      });
-      browser.on("message", (raw, binary) => {
-        if (binary || !sessions.has(session.token) || session.expires < Date.now()) {
-          browser.close(1008, "Session expired or unsupported message");
-          return;
-        }
-        try {
-          const original = JSON.parse(raw.toString());
-          const allowed = studentMessage(original, session.student);
-          if (!allowed) {
-            const message = original.message;
-            appendFileSync(
-              join(config.recordsDir, `${session.studentId}.denied.jsonl`),
-              JSON.stringify({
-                at: new Date().toISOString(),
-                type: message?.type || original.type,
-              }) + "\n",
-              { mode: 0o600 },
-            );
-            if (message?.requestId)
-              browser.send(
-                JSON.stringify({
-                  type: "session",
-                  message: {
-                    type: "rpc_error",
-                    payload: {
-                      requestId: message.requestId,
-                      requestType: message.type,
-                      code: "access_denied",
-                      error: "This action is unavailable in the student study",
-                    },
-                  },
-                }),
-              );
-            return;
-          }
-          if (allowed.type === "session" && allowed.message.type === "send_agent_message_request")
-            appendFileSync(
-              join(config.recordsDir, `${session.studentId}.requests.jsonl`),
-              JSON.stringify({ receivedAt: new Date().toISOString(), message: allowed.message }) +
-                "\n",
-              { mode: 0o600 },
-            );
-          const frame = JSON.stringify(allowed);
-          if (upstream.readyState === WebSocket.OPEN) upstream.send(frame);
-          else if (upstream.readyState === WebSocket.CONNECTING && pending.length < 100)
-            pending.push(frame);
-          else browser.close(1013, "Try reconnecting");
-        } catch {
-          browser.close(1008, "Invalid request");
-        }
-      });
-      upstream.on("message", (raw, binary) => {
-        if (browser.readyState === WebSocket.OPEN) browser.send(raw, { binary });
-      });
-      upstream.on("error", () => browser.close(1011, "Student runtime unavailable"));
-      browser.on("error", () => upstream.close());
-      upstream.on("close", () => browser.close());
-      browser.on("close", () => {
-        upstream.close();
-        socketPairs.delete(pair);
-      });
-    });
-  });
+  installProxy({ server, config, authenticate, checkOrigin, sessions, socketPairs, limits });
   await new Promise((accept) => server.listen(config.port || 0, "127.0.0.1", accept));
   const maintenance = setInterval(() => {
     for (const [token, session] of sessions)
-      if (session.expires < Date.now()) sessions.delete(token);
-    for (const [address, attempt] of attempts)
-      if (attempt.until < Date.now()) attempts.delete(address);
+      if (session.expires < Date.now()) {
+        sessions.delete(token);
+        for (const pair of socketPairs)
+          if (pair.token === token) {
+            pair.browser.close(1008, "Session expired");
+            pair.upstream.close();
+          }
+      }
     for (const student of students.values())
       transcript(student).catch((error) =>
         console.error("Transcript checkpoint failed:", error.message),

@@ -1836,7 +1836,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
             {/* Toolbar left: attachment button + agent controls */}
             <View style={styles.leftButtonGroup}>
               <AttachmentDropdown
-                visible={studyControl(mode.showAttachments)}
+                visible={mode.showAttachments}
                 isConnected={isConnected}
                 disabled={disabled}
                 attachButtonStyle={attachButtonStyle}

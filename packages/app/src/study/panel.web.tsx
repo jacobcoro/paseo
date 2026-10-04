@@ -224,7 +224,11 @@ export function StudyPanel() {
   const pathname = usePathname();
   const connected = useHostRuntimeIsConnected(student.data?.serverId || "");
   useEffect(() => {
-    if (!student.data || !connected || !["/", "/welcome", "/open-project"].includes(pathname))
+    if (
+      !student.data ||
+      !connected ||
+      !["/", "/welcome", "/open-project", "/new", "/history", "/settings"].includes(pathname)
+    )
       return;
     router.replace({
       pathname: "/h/[serverId]/agent/[agentId]",
@@ -253,6 +257,9 @@ export function StudyPanel() {
         <View style={styles.identity}>
           <Text style={styles.text}>Lulu · {student.data.studentId}</Text>
           <Text style={styles.muted}>{modeLabel}</Text>
+          <Text style={styles.muted}>
+            图片 / Images: PNG, JPEG, WebP · 4 / prompt · 2 MiB / image
+          </Text>
         </View>
         <Button size="sm" onPress={openSheet}>
           研究记录 / Record
