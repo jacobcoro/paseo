@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual, createHash } from "node:crypto";
 import {
   appendFileSync,
   renameSync,
@@ -21,6 +21,7 @@ import { createLimits } from "./limits.mjs";
 import { installProxy } from "./proxy.mjs";
 import { mergeTranscript } from "./transcript.mjs";
 import { releaseIdleRuntime } from "./runtime-control.mjs";
+import { researchSession } from "./research-session.mjs";
 import { nativeCreation, savedTimeline } from "./native-controls.mjs";
 import { persistImages } from "./images.mjs";
 import {
@@ -249,7 +250,7 @@ export async function startGateway(config) {
     if (saved && saved.studentId !== student.id)
       throw new Error("Saved transcript belongs to another student or agent");
     const owned = [
-      { agentId: student.agentId, title: "水杯设计研究 / Cup design study", createdAt: null },
+      { agentId: student.agentId, title: "设计对话 / Design chat", createdAt: null },
       ...conversationRecords.get(student.id),
     ];
     const readonlyIds = [
@@ -469,9 +470,12 @@ export async function startGateway(config) {
   }
   async function handleNativeCreation(student, request) {
     const options = nativeCreation(request, student, await modelsFor(student));
+    const fingerprint = createHash("sha256").update(JSON.stringify(options)).digest("hex");
     const prior = conversationRecords
       .get(student.id)
       .find((item) => item.idempotencyKey === options.idempotencyKey);
+    if (prior?.fingerprint && prior.fingerprint !== fingerprint)
+      throw Error("A retry cannot change the original chat request");
     if (prior)
       return {
         type: "agent.create.response",
@@ -493,7 +497,10 @@ export async function startGateway(config) {
       const quota = limits.prompt(student);
       if (quota) throw Error(quota);
       await prepareConversation(student, "new");
-      options.agentId ||= randomUUID();
+      const identity = createHash("sha256")
+        .update(student.id + ":" + options.idempotencyKey)
+        .digest("hex");
+      options.agentId ||= `${identity.slice(0, 8)}-${identity.slice(8, 12)}-4${identity.slice(13, 16)}-a${identity.slice(17, 20)}-${identity.slice(20, 32)}`;
       const promptRequest = {
         ...request,
         agentId: options.agentId,
@@ -840,6 +847,21 @@ export async function startGateway(config) {
     if (request.method !== "GET") return reply(response, 405, { error: "Method not allowed" });
     if (pathname === "/study/admin")
       return reply(response, 200, adminHtml, { "Content-Type": "text/html; charset=utf-8" });
+    if (pathname === "/study/admin/session") {
+      const agentId = new URL(request.url, "http://study.local").searchParams.get("agentId");
+      const owner = [...students.values()].find((student) =>
+        [
+          student.agentId,
+          ...student.ownedConversationIds,
+          ...(student.historicalAgentIds || []),
+          ...(student.preservedAgentIds || []),
+        ].includes(agentId),
+      );
+      if (!owner) return reply(response, 404, { error: "Session not found" });
+      const data = researchSession(await exportStudent(owner, "/study/admin/output/"), agentId);
+      if (!data) return reply(response, 404, { error: "Session not found" });
+      return reply(response, 200, data);
+    }
     const selected = students.get(
       new URL(request.url, "http://study.local").searchParams.get("studentId"),
     );

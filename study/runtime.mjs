@@ -48,7 +48,7 @@ try {
       mkdirSync(path, { recursive: true, mode: 0o700 });
     writeFileSync(
       join(workspace, "design-brief.md"),
-      "设计任务：为老年人设计一款水杯。记录你的分析、选择与修改。\nDesign a drinking cup for older adults. Document your analysis, choices, and revisions.\n",
+      "请根据老师布置的设计任务开展工作，并记录你的分析、选择与修改。\nWork on the design task assigned by your teacher. Record your analysis, choices and revisions.\n",
     );
     writeFileSync(
       join(paseoHome, "config.json"),
@@ -195,7 +195,7 @@ try {
     try {
       const created = await client.createWorkspace({
         source: { kind: "directory", path: "/workspace" },
-        title: "水杯设计 / Cup design",
+        title: "设计研究 / Design study",
       });
       if (!created.workspace) throw new Error(created.error || "Workspace creation failed");
       const config =
@@ -213,7 +213,7 @@ try {
           : studyAgentConfig();
       const agent = await client.createAgent({
         workspaceId: created.workspace.id,
-        config: { ...config, title: "水杯设计研究 / Cup design study" },
+        config: { ...config, title: "设计对话 / Design chat" },
         labels: { "study.student": id },
       });
       const status = await fetch(`http://127.0.0.1:${port}/api/status`, {
