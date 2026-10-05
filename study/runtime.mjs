@@ -114,6 +114,7 @@ try {
         // Codex's tool host needs thread headroom beyond the daemon and model process.
         mode === "live" ? "--pids-limit=256" : "--pids-limit=128",
         "--memory=1536m",
+        "--memory-swap=1536m",
         "--cpus=1",
         "--tmpfs",
         "/tmp:rw,nosuid,size=256m",
