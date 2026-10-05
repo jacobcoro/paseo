@@ -23,6 +23,12 @@ import { mergeTranscript } from "./transcript.mjs";
 import { releaseIdleRuntime } from "./runtime-control.mjs";
 import { studyAgentConfig } from "./chat-profile.mjs";
 import {
+  ModelSettingsInput,
+  studentModels,
+  validModelSettings,
+  conversationSettings,
+} from "./model-settings.mjs";
+import {
   documentRecords,
   documentFile,
   persistDocumentUpload,
@@ -126,11 +132,14 @@ export async function startGateway(config) {
     config.students.map((student) => [student.id, student.agentId]),
   );
   const preparationLocks = new Map();
-  function prepareConversation(student, agentId) {
+  function prepareConversation(student, agentId, operation = () => {}) {
     const previous = preparationLocks.get(student.id) || Promise.resolve();
     const current = previous
       .catch(() => {})
-      .then(() => prepareConversationUnlocked(student, agentId));
+      .then(async () => {
+        await prepareConversationUnlocked(student, agentId);
+        return operation();
+      });
     preparationLocks.set(student.id, current);
     return current;
   }
@@ -142,6 +151,33 @@ export async function startGateway(config) {
         throw Error("Wait for the current reply before changing chats");
     }
     activeConversations.set(student.id, agentId);
+  }
+  const modelCatalogs = new Map();
+  async function modelsFor(student) {
+    let catalog = modelCatalogs.get(student.id);
+    if (!catalog || catalog.expires < Date.now()) {
+      catalog = {
+        expires: Date.now() + 300000,
+        promise: clients.get(student.id).listProviderModels("codex", { cwd: "/workspace" }),
+      };
+      modelCatalogs.set(student.id, catalog);
+    }
+    const result = await catalog.promise;
+    if (result.error) {
+      modelCatalogs.delete(student.id);
+      throw Error("Model list is unavailable. Retry shortly.");
+    }
+    return result.models;
+  }
+  async function settingsFor(student, agentId) {
+    const { agent } = await clients.get(student.id).fetchAgent(agentId);
+    return conversationSettings(agent);
+  }
+  function settingChanges(student) {
+    const path = join(config.recordsDir, `${student.id}.settings.jsonl`);
+    return existsSync(path)
+      ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse)
+      : [];
   }
   function authenticate(request) {
     const token = /(?:^|;\s*)study_session=([^;]+)/.exec(request.headers.cookie || "")?.[1];
@@ -217,7 +253,11 @@ export async function startGateway(config) {
     ]) {
       const previous = previousGroups.find((group) => group.agentId === conversation.agentId);
       if (conversation.agentId !== activeConversations.get(student.id)) {
-        conversations.push({ ...conversation, entries: previous?.entries || [] });
+        conversations.push({
+          ...previous,
+          ...conversation,
+          entries: previous?.entries || [],
+        });
         continue;
       }
       let page = await client.fetchAgentTimeline(conversation.agentId, {
@@ -240,6 +280,7 @@ export async function startGateway(config) {
       }
       conversations.push({
         ...conversation,
+        settings: await settingsFor(student, conversation.agentId),
         entries: mergeTranscript(previous?.entries || [], entries).map((entry) =>
           Object.assign({}, entry, { agentId: conversation.agentId }),
         ),
@@ -315,6 +356,80 @@ export async function startGateway(config) {
     );
   }
   const researchRoutes = new Map([
+    [
+      "GET /study/settings",
+      {
+        method: "GET",
+        run: async (request, response, { student }) => {
+          const agentId = new URL(request.url, "http://study.local").searchParams.get("agentId");
+          if (![student.agentId, ...student.ownedConversationIds].includes(agentId))
+            return reply(response, 404, { error: "Conversation not found" });
+          return reply(response, 200, {
+            agentId,
+            ...(await settingsFor(student, agentId)),
+            models: studentModels(await modelsFor(student)),
+          });
+        },
+      },
+    ],
+    [
+      "POST /study/settings",
+      {
+        method: "POST",
+        run: async (request, response, { student }) => {
+          const parsed = ModelSettingsInput.safeParse(await jsonBody(request, 2000));
+          if (!parsed.success)
+            return reply(response, 400, { error: "Choose a model and reasoning level" });
+          const input = parsed.data;
+          if (![student.agentId, ...student.ownedConversationIds].includes(input.agentId))
+            return reply(response, 404, { error: "Conversation not found" });
+          if (!validModelSettings(input, await modelsFor(student)))
+            return reply(response, 403, {
+              error: "This model or reasoning level is unavailable. Astra is blocked.",
+            });
+          if (!limits.allow("settings:" + student.id, 20))
+            return reply(response, 429, { error: "Wait a minute before changing settings again" });
+          try {
+            const settings = await prepareConversation(student, input.agentId, async () => {
+              const client = clients.get(student.id);
+              const { agent } = await client.fetchAgent(input.agentId);
+              if (["running", "initializing", "awaiting_input"].includes(agent.status))
+                throw Error("Wait for the reply to finish before changing settings");
+              const before = conversationSettings(agent);
+              const audit = {
+                recordedAt: new Date().toISOString(),
+                agentId: input.agentId,
+                before,
+                requested: input,
+                success: false,
+              };
+              try {
+                await client.applyAgentConfig(input.agentId, {
+                  modelId: input.modelId,
+                  thinkingOptionId: input.thinkingOptionId,
+                });
+                audit.success = true;
+              } finally {
+                audit.after = await settingsFor(student, input.agentId);
+                appendFileSync(
+                  join(config.recordsDir, `${student.id}.settings.jsonl`),
+                  JSON.stringify(audit) + "\n",
+                  { mode: 0o600 },
+                );
+              }
+              return audit.after;
+            });
+            return reply(response, 200, {
+              agentId: input.agentId,
+              ...settings,
+              models: studentModels(await modelsFor(student)),
+            });
+          } catch (error) {
+            return reply(response, 409, { error: error.message });
+          }
+        },
+      },
+    ],
     [
       "/study/logout",
       {
@@ -630,6 +745,7 @@ export async function startGateway(config) {
         });
       }),
       annotations: annotations(student),
+      settingChanges: settingChanges(student),
       submittedImages: imageRecords(config, student),
       generatedImages: generatedImageRecords(config, student),
       submittedDocuments: documentRecords(config, student).filter((file) => file.kind === "upload"),
@@ -831,6 +947,7 @@ export async function startGateway(config) {
     sessions,
     socketPairs,
     limits,
+    getConversationSettings: settingsFor,
     onAssistantTimeline: (student, entries) => archiveImages(student, entries).catch(() => {}),
   });
   await new Promise((accept) => server.listen(config.port || 0, "127.0.0.1", accept));

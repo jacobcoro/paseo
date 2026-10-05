@@ -34,6 +34,7 @@ export function installProxy({
   sessions,
   socketPairs,
   limits,
+  getConversationSettings,
   onAssistantTimeline,
   prepareConversation,
 }) {
@@ -117,6 +118,7 @@ export function installProxy({
               documents: documentRecords(config, session.student).map(
                 ({ id, name, mimeType, bytes, kind }) => ({ id, name, mimeType, bytes, kind }),
               ),
+              settings: await getConversationSettings(session.student, allowed.message.agentId),
             }) + "\n",
             { mode: 0o600 },
           );

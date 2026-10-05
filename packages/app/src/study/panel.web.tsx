@@ -33,6 +33,19 @@ const Conversation = z.object({
 const Conversations = z.object({
   conversations: z.array(Conversation),
 });
+const ModelSettings = z.object({
+  agentId: z.string(),
+  modelId: z.string(),
+  thinkingOptionId: z.string().nullable(),
+  models: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string(),
+      defaultThinkingOptionId: z.string().nullable(),
+      thinkingOptions: z.array(z.object({ id: z.string(), label: z.string() })),
+    }),
+  ),
+});
 const Files = z.object({
   files: z.array(
     z.object({
@@ -401,6 +414,10 @@ function StudyTools({ student }: StudyToolsProps) {
         <Button size="sm" onPress={createNewChat} loading={create.isPending}>
           New chat
         </Button>
+        {student.mode === "live" &&
+          conversations.data?.conversations.some(
+            (item) => item.agentId === selectedAgentId && !item.readonly,
+          ) && <ModelControls key={selectedAgentId} agentId={selectedAgentId} />}
         {create.isError && <Text style={styles.error}>{create.error.message}</Text>}
         <DocumentControls setNotice={setVoiceNotice} />
         <Button size="sm" variant="ghost" onPress={dictateCurrent}>
@@ -412,6 +429,104 @@ function StudyTools({ student }: StudyToolsProps) {
         <MemoryControls />
       </View>
       {!!voiceNotice && <Text style={styles.muted}>{voiceNotice}</Text>}
+    </>
+  );
+}
+
+function ModelControls({ agentId }: { agentId: string }) {
+  const queryClient = useQueryClient();
+  const queryKey = useMemo(() => ["study-model-settings", agentId], [agentId]);
+  const settings = useFetchQuery({
+    dataShape: "value",
+    staleTimeMs: 2000,
+    queryKey,
+    queryFn: async () =>
+      ModelSettings.parse(await getJson(`/study/settings?agentId=${encodeURIComponent(agentId)}`)),
+    refetchInterval: 10000,
+  });
+  const change = useMutation({
+    mutationFn: async (input: { modelId: string; thinkingOptionId: string }) => {
+      const response = await fetch("/study/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId, ...input }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not change model settings");
+      return ModelSettings.parse(result);
+    },
+    onSuccess: (result) => queryClient.setQueryData(queryKey, result),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey }),
+  });
+  const model = settings.data?.models.find((item) => item.id === settings.data?.modelId);
+  const models = useMemo(
+    () =>
+      (settings.data?.models || []).map((item) => ({
+        id: item.id,
+        value: item.id,
+        label: item.label,
+      })),
+    [settings.data],
+  );
+  const levels = useMemo(
+    () =>
+      (model?.thinkingOptions || []).map((item) => ({
+        id: item.id,
+        value: item.id,
+        label: item.label,
+      })),
+    [model],
+  );
+  const chooseModel = useCallback(
+    (modelId: string) => {
+      const next = settings.data?.models.find((item) => item.id === modelId);
+      if (!next) return;
+      const current = settings.data?.thinkingOptionId;
+      const thinkingOptionId = next.thinkingOptions.some((item) => item.id === current)
+        ? current
+        : next.defaultThinkingOptionId;
+      if (thinkingOptionId) change.mutate({ modelId, thinkingOptionId });
+    },
+    [settings.data, change],
+  );
+  const chooseReasoning = useCallback(
+    (thinkingOptionId: string) => {
+      if (model) change.mutate({ modelId: model.id, thinkingOptionId });
+    },
+    [model, change],
+  );
+  const modelDisplay = useMemo(() => (model ? { label: model.label } : null), [model]);
+  const reasoningDisplay = useMemo(() => {
+    const level = levels.find((item) => item.id === settings.data?.thinkingOptionId);
+    return level ? { label: level.label } : null;
+  }, [levels, settings.data]);
+  return (
+    <>
+      <SelectField
+        label="模型 / Model"
+        size="sm"
+        value={settings.data?.modelId || null}
+        selectedDisplay={modelDisplay}
+        options={models}
+        onChange={chooseModel}
+        disabled={change.isPending || !models.length}
+        placeholder="Loading models"
+        searchable
+      />
+      <SelectField
+        label="推理 / Reasoning"
+        size="sm"
+        value={settings.data?.thinkingOptionId || null}
+        selectedDisplay={reasoningDisplay}
+        options={levels}
+        onChange={chooseReasoning}
+        disabled={change.isPending || !levels.length}
+        placeholder="Reasoning"
+      />
+      {change.isPending && <Text style={styles.muted}>Saving settings…</Text>}
+      {(settings.isError || change.isError) && (
+        <Text style={styles.error}>{change.error?.message || settings.error?.message}</Text>
+      )}
     </>
   );
 }
