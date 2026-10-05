@@ -4,6 +4,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { studentMessage } from "./policy.mjs";
 import { persistImages } from "./images.mjs";
 import { rewriteGeneratedImageMarkdown } from "./outputs.mjs";
+import { filterStudentResponse } from "./native-controls.mjs";
 import { documentRecords } from "./documents.mjs";
 
 function rewriteImages(text, records, origin) {
@@ -34,8 +35,10 @@ export function installProxy({
   sessions,
   socketPairs,
   limits,
+  getConversationSettings,
   onAssistantTimeline,
   prepareConversation,
+  handleStudentRequest,
 }) {
   const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 12 * 1024 * 1024 });
   server.on("upgrade", (request, socket, head) => {
@@ -57,6 +60,35 @@ export function installProxy({
         for (const frame of pending) upstream.send(frame);
         pending.length = 0;
       });
+      async function prepare(allowed) {
+        if (
+          allowed.message?.agentId &&
+          [
+            "send_agent_message_request",
+            "fetch_agent_timeline_request",
+            "agent.timeline.set_subscription.request",
+          ].includes(allowed.message.type)
+        ) {
+          try {
+            await prepareConversation?.(session.student, allowed.message.agentId);
+          } catch (error) {
+            deny(browser, allowed.message, error.message);
+            return false;
+          }
+        }
+        return true;
+      }
+      async function archiveHandled(message) {
+        const entries = message.payload?.entries?.filter(
+          (entry) => entry.item?.type === "assistant_message",
+        );
+        if (entries?.length && onAssistantTimeline) {
+          const records = await onAssistantTimeline(session.student, entries);
+          for (const entry of entries)
+            entry.item.text = rewriteImages(entry.item.text, records || [], origin);
+        }
+        return filterStudentResponse(message);
+      }
       async function handle(raw, binary) {
         if (binary || !sessions.has(session.token) || session.expires < Date.now()) {
           browser.close(1008, "Session expired or unsupported message");
@@ -80,21 +112,19 @@ export function installProxy({
           );
           return;
         }
-        if (
-          allowed.message?.agentId &&
-          [
-            "send_agent_message_request",
-            "fetch_agent_timeline_request",
-            "agent.timeline.set_subscription.request",
-          ].includes(allowed.message.type)
-        ) {
-          try {
-            await prepareConversation?.(session.student, allowed.message.agentId);
-          } catch (error) {
-            deny(browser, allowed.message, error.message);
+        try {
+          const handled = await handleStudentRequest(session.student, allowed.message);
+          if (handled) {
+            browser.send(
+              JSON.stringify({ type: "session", message: await archiveHandled(handled) }),
+            );
             return;
           }
+        } catch (error) {
+          deny(browser, allowed.message, error.message);
+          return;
         }
+        if (!(await prepare(allowed))) return;
         if (allowed.type === "session" && allowed.message.type === "send_agent_message_request") {
           const quotaError = limits.prompt(session.student);
           if (quotaError) {
@@ -117,10 +147,13 @@ export function installProxy({
               documents: documentRecords(config, session.student).map(
                 ({ id, name, mimeType, bytes, kind }) => ({ id, name, mimeType, bytes, kind }),
               ),
+              settings: await getConversationSettings(session.student, allowed.message.agentId),
             }) + "\n",
             { mode: 0o600 },
           );
         }
+        if (allowed.message?.type === "get_providers_snapshot_request")
+          delete allowed.message.ifNoneMatch;
         const frame = JSON.stringify(allowed);
         if (upstream.readyState === WebSocket.OPEN) upstream.send(frame);
         else if (upstream.readyState === WebSocket.CONNECTING && pending.length < 100)
@@ -155,10 +188,11 @@ export function installProxy({
         queuedOutputBytes -= size;
       }
       async function forward(raw, binary) {
-        if (!binary && onAssistantTimeline) {
+        if (!binary) {
           try {
             const envelope = JSON.parse(raw.toString());
             const message = envelope.type === "session" ? envelope.message : envelope;
+            filterStudentResponse(message);
             const payload = message?.payload || message;
             const ownedAgents = [
               session.student.agentId,
@@ -174,13 +208,15 @@ export function installProxy({
               for (const child of Object.values(value)) collect(child);
             }
             if (ownedAgents.includes(payload?.agentId)) collect(payload);
-            if (entries.length) {
+            if (entries.length && onAssistantTimeline) {
               const records = await onAssistantTimeline(session.student, entries);
               for (const entry of entries)
                 entry.item.text = rewriteImages(entry.item.text, records || [], origin);
               if (browser.readyState === WebSocket.OPEN) browser.send(JSON.stringify(envelope));
               return;
             }
+            if (browser.readyState === WebSocket.OPEN) browser.send(JSON.stringify(envelope));
+            return;
           } catch {}
         }
         if (browser.readyState === WebSocket.OPEN) browser.send(raw, { binary });

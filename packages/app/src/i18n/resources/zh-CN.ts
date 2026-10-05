@@ -91,7 +91,7 @@ export const zhCN: TranslationResources = {
       files: "文件",
       workspaces: "工作区",
       agents: "Agents",
-      newAgent: "新建 Agent",
+      newAgent: "新建对话",
       open: "打开{{name}}",
       openInSidePane: "在侧边面板中打开{{name}}",
       openInFocusedPane: "在当前窗格中打开{{name}}",
@@ -157,7 +157,7 @@ export const zhCN: TranslationResources = {
       addIssueOrPr: "添加 issue 或 PR",
       addIssueOrPr_mr: "添加 issue 或 MR",
       dropImagesHere: "将图片拖放到这里",
-      dropFilesHere: "Drop files here",
+      dropFilesHere: "将文件拖到此处",
       editQueuedMessage: "编辑排队消息",
       sendQueuedMessageNow: "立即发送排队消息",
       openImage: "打开图片附件",
@@ -201,11 +201,11 @@ export const zhCN: TranslationResources = {
       select: "选择 Agent Provider",
     },
     thinking: {
-      title: "Thinking",
+      title: "推理强度",
       unknown: "未知",
-      extraHigh: "Extra high",
-      select: "选择 thinking 选项",
-      selectWithValue: "选择 thinking 选项（{{value}}）",
+      extraHigh: "极高",
+      select: "选择推理强度",
+      selectWithValue: "选择推理强度（{{value}}）",
     },
     model: {
       unknown: "未知 Model",
@@ -222,7 +222,7 @@ export const zhCN: TranslationResources = {
       selectWithValue: "选择 Agent mode（{{value}}）",
     },
     hints: {
-      thinking: "Thinking mode",
+      thinking: "推理模式",
       model: "切换 Model",
       mode: "更改模式",
     },
@@ -612,12 +612,12 @@ export const zhCN: TranslationResources = {
       modified: "未保存的更改",
       loadingAgentTitle: "正在加载 Agent 标题",
       fallback: {
-        newAgent: "新建 Agent",
+        newAgent: "新建对话",
         setup: "Setup",
         workspaceSetup: "Workspace setup",
         terminal: "Terminal",
         browser: "浏览器",
-        agent: "Agent",
+        agent: "对话",
         workspace: "Workspace",
       },
       switcher: {
@@ -646,7 +646,7 @@ export const zhCN: TranslationResources = {
       },
       actions: {
         newTab: "新建标签页",
-        newAgent: "新建 Agent",
+        newAgent: "新建对话",
         newTerminal: "新建 Terminal",
         preparingTerminal: "正在准备 Terminal 标签",
         preparingTerminalTooltip: "正在准备 Terminal...",
@@ -716,7 +716,7 @@ export const zhCN: TranslationResources = {
     header: {
       actions: {
         workspaceActions: "Workspace 操作",
-        newAgent: "新建 Agent",
+        newAgent: "新建对话",
         newTerminal: "新建 Terminal",
         newBrowser: "新建浏览器标签",
         importSession: "导入会话",
@@ -1815,7 +1815,7 @@ export const zhCN: TranslationResources = {
   },
   panels: {
     draft: {
-      newAgent: "新建 Agent",
+      newAgent: "新建对话",
       creatingAgent: "正在创建 Agent",
     },
     file: {

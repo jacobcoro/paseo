@@ -22,7 +22,15 @@ function getSystemLocales(): string[] {
 export function I18nProvider({ children }: I18nProviderProps) {
   const { settings } = useAppSettings();
   const systemLocales = useMemo(() => getSystemLocales(), []);
-  const locale = resolveSupportedLocale(settings.language, systemLocales);
+  const studyLanguage =
+    isWeb && process.env.EXPO_PUBLIC_LULU_STUDY === "1"
+      ? localStorage.getItem("study.language")
+      : null;
+  const studyLocale = studyLanguage === "en" ? "en" : "zh-CN";
+  const locale =
+    process.env.EXPO_PUBLIC_LULU_STUDY === "1"
+      ? studyLocale
+      : resolveSupportedLocale(settings.language, systemLocales);
 
   ensureI18nLanguageForRender(locale, i18n);
 

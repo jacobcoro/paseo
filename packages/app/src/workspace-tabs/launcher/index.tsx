@@ -244,6 +244,9 @@ export function useWorkspaceTabLaunchCatalog(input: {
         },
       });
     }
+    if (process.env.EXPO_PUBLIC_LULU_STUDY === "1") {
+      return [{ id: "tabs", label: null, items: tabItems.filter((item) => item.id === "agent") }];
+    }
     if (surface !== "menu") return groups;
     return groups.flatMap((group) => {
       const items = group.items.filter((item) =>

@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual, createHash } from "node:crypto";
 import {
   appendFileSync,
   renameSync,
@@ -21,7 +21,15 @@ import { createLimits } from "./limits.mjs";
 import { installProxy } from "./proxy.mjs";
 import { mergeTranscript } from "./transcript.mjs";
 import { releaseIdleRuntime } from "./runtime-control.mjs";
-import { studyAgentConfig } from "./chat-profile.mjs";
+import { researchSession } from "./research-session.mjs";
+import { nativeCreation, savedTimeline } from "./native-controls.mjs";
+import { persistImages } from "./images.mjs";
+import {
+  ModelSettingsInput,
+  studentModels,
+  validModelSettings,
+  conversationSettings,
+} from "./model-settings.mjs";
 import {
   documentRecords,
   documentFile,
@@ -126,22 +134,72 @@ export async function startGateway(config) {
     config.students.map((student) => [student.id, student.agentId]),
   );
   const preparationLocks = new Map();
-  function prepareConversation(student, agentId) {
+  function prepareConversation(student, agentId, operation = () => {}) {
     const previous = preparationLocks.get(student.id) || Promise.resolve();
     const current = previous
       .catch(() => {})
-      .then(() => prepareConversationUnlocked(student, agentId));
+      .then(async () => {
+        await prepareConversationUnlocked(student, agentId);
+        return operation();
+      });
     preparationLocks.set(student.id, current);
     return current;
   }
   async function prepareConversationUnlocked(student, agentId) {
     const previous = activeConversations.get(student.id);
-    if (previous && previous !== agentId) {
-      await transcript(student);
-      if (!(await releaseIdleRuntime(student, previous)))
+    if (previous && previous !== agentId) await transcript(student);
+    // Native tab observers can reopen idle histories. Release every owned idle
+    // runtime before loading a chat, rather than only the last selected one.
+    for (const id of new Set([student.agentId, ...student.ownedConversationIds])) {
+      if (id !== agentId && !(await releaseIdleRuntime(student, id)))
         throw Error("Wait for the current reply before changing chats");
     }
+    if (agentId !== "new") {
+      const agent = await metadataFor(student, agentId);
+      if (
+        agent.lastUserMessageAt === null &&
+        agent.persistence &&
+        !["running", "initializing", "awaiting_input"].includes(agent.status)
+      ) {
+        if (!(await releaseIdleRuntime(student, agentId)))
+          throw Error("Wait for the current reply before changing chats");
+      }
+    }
     activeConversations.set(student.id, agentId);
+  }
+  const modelCatalogs = new Map();
+  async function modelsFor(student) {
+    let catalog = modelCatalogs.get(student.id);
+    if (!catalog || catalog.expires < Date.now()) {
+      catalog = {
+        expires: Date.now() + 300000,
+        promise: clients.get(student.id).listProviderModels("codex", { cwd: "/workspace" }),
+      };
+      modelCatalogs.set(student.id, catalog);
+    }
+    const result = await catalog.promise;
+    if (result.error) {
+      modelCatalogs.delete(student.id);
+      throw Error("Model list is unavailable. Retry shortly.");
+    }
+    return result.models;
+  }
+  async function metadataFor(student, agentId) {
+    const listed = await clients
+      .get(student.id)
+      .fetchAgents({ filter: { includeArchived: true }, page: { limit: 200 } });
+    const entry = listed.entries.find((item) => item.agent.id === agentId);
+    if (!entry) throw Error("Conversation not found");
+    return entry.agent;
+  }
+  async function settingsFor(student, agentId) {
+    return conversationSettings(await metadataFor(student, agentId));
+  }
+  function settingChanges(student) {
+    const path = join(config.recordsDir, `${student.id}.settings.jsonl`);
+    return existsSync(path)
+      ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse)
+      : [];
   }
   function authenticate(request) {
     const token = /(?:^|;\s*)study_session=([^;]+)/.exec(request.headers.cookie || "")?.[1];
@@ -179,6 +237,14 @@ export async function startGateway(config) {
     transcriptLocks.set(student.id, current);
     return current;
   }
+  function emptyConversation(previous, conversation, metadata) {
+    return {
+      ...previous,
+      ...conversation,
+      settings: conversationSettings(metadata),
+      entries: previous?.entries || [],
+    };
+  }
   async function collectTranscript(student) {
     const client = clients.get(student.id);
     const destination = join(config.recordsDir, `${student.id}.transcript.json`);
@@ -186,7 +252,7 @@ export async function startGateway(config) {
     if (saved && saved.studentId !== student.id)
       throw new Error("Saved transcript belongs to another student or agent");
     const owned = [
-      { agentId: student.agentId, title: "水杯设计研究 / Cup design study", createdAt: null },
+      { agentId: student.agentId, title: "设计对话 / Design chat", createdAt: null },
       ...conversationRecords.get(student.id),
     ];
     const readonlyIds = [
@@ -217,7 +283,16 @@ export async function startGateway(config) {
     ]) {
       const previous = previousGroups.find((group) => group.agentId === conversation.agentId);
       if (conversation.agentId !== activeConversations.get(student.id)) {
-        conversations.push({ ...conversation, entries: previous?.entries || [] });
+        conversations.push({
+          ...previous,
+          ...conversation,
+          entries: previous?.entries || [],
+        });
+        continue;
+      }
+      const metadata = await metadataFor(student, conversation.agentId);
+      if (metadata.lastUserMessageAt === null) {
+        conversations.push(emptyConversation(previous, conversation, metadata));
         continue;
       }
       let page = await client.fetchAgentTimeline(conversation.agentId, {
@@ -240,6 +315,7 @@ export async function startGateway(config) {
       }
       conversations.push({
         ...conversation,
+        settings: await settingsFor(student, conversation.agentId),
         entries: mergeTranscript(previous?.entries || [], entries).map((entry) =>
           Object.assign({}, entry, { agentId: conversation.agentId }),
         ),
@@ -288,6 +364,219 @@ export async function startGateway(config) {
     renameSync(temporary, filename);
     conversationCreatedAt.set(student.id, lastCreatedAt);
     student.ownedConversationIds = saved.conversations.map((item) => item.agentId);
+  }
+  async function applySettings(student, input) {
+    const parsed = ModelSettingsInput.parse(input);
+    if (![student.agentId, ...student.ownedConversationIds].includes(parsed.agentId))
+      throw Error("Conversation not found");
+    if (!validModelSettings(parsed, await modelsFor(student)))
+      throw Error("This model or reasoning level is unavailable. Astra is blocked.");
+    if (!limits.allow("settings:" + student.id, 20))
+      throw Error("Wait a minute before changing settings again");
+    return prepareConversation(student, input.agentId, async () => {
+      const client = clients.get(student.id);
+      const agent = await metadataFor(student, input.agentId);
+      if (["running", "initializing", "awaiting_input"].includes(agent.status))
+        throw Error("Wait for the reply to finish before changing settings");
+      const audit = {
+        recordedAt: new Date().toISOString(),
+        agentId: input.agentId,
+        before: conversationSettings(agent),
+        requested: input,
+        success: false,
+      };
+      try {
+        await client.applyAgentConfig(input.agentId, {
+          modelId: input.modelId,
+          thinkingOptionId: input.thinkingOptionId,
+        });
+        audit.success = true;
+      } finally {
+        audit.after = await settingsFor(student, input.agentId);
+        appendFileSync(
+          join(config.recordsDir, `${student.id}.settings.jsonl`),
+          JSON.stringify(audit) + "\n",
+          { mode: 0o600 },
+        );
+      }
+      return audit.after;
+    });
+  }
+  async function handleStudentRequest(student, request) {
+    if (!request) return null;
+    const readonly = new Set([
+      ...(student.historicalAgentIds || []),
+      ...(student.preservedAgentIds || []),
+    ]);
+    if (
+      request.type === "agent.timeline.set_subscription.request" &&
+      request.agentIds?.every((id) => readonly.has(id))
+    ) {
+      return {
+        type: "agent.timeline.set_subscription.response",
+        payload: { requestId: request.requestId, agentIds: request.agentIds },
+      };
+    }
+    if (request.type === "agent.timeline.set_subscription.request")
+      request.agentIds = request.agentIds?.filter((id) => !readonly.has(id));
+    if (request.type === "fetch_agent_timeline_request" && readonly.has(request.agentId)) {
+      const path = join(config.recordsDir, `${student.id}.transcript.json`);
+      const saved = JSON.parse(readFileSync(path, "utf8"));
+      const group = saved.conversations?.find((item) => item.agentId === request.agentId);
+      return savedTimeline(
+        request,
+        group?.entries || [],
+        await metadataFor(student, request.agentId),
+      );
+    }
+    if (
+      [
+        "set_agent_model_request",
+        "set_agent_thinking_request",
+        "agent.config.apply.request",
+      ].includes(request.type)
+    )
+      return handleNativeSettings(student, request);
+    const wakeResponses = {
+      fetch_agent_timeline_request: "fetch_agent_timeline_response",
+      list_commands_request: "list_commands_response",
+      clear_agent_attention: "clear_agent_attention_response",
+      "agent.timeline.search.request": "agent.timeline.search.response",
+      "agent.timeline.list_prompts.request": "agent.timeline.list_prompts.response",
+    };
+    const responseType = wakeResponses[request.type];
+    if (responseType && typeof request.agentId === "string") {
+      return prepareConversation(student, request.agentId, async () => ({
+        type: responseType,
+        payload: await clients.get(student.id).sendCorrelatedSessionRequest({
+          requestId: request.requestId,
+          message: request,
+          responseType,
+        }),
+      }));
+    }
+    if (request.type !== "agent.create.request") return null;
+    return handleNativeCreation(student, request);
+  }
+  async function handleNativeSettings(student, request) {
+    const current = await settingsFor(student, request.agentId);
+    let update;
+    if (request.type === "agent.config.apply.request") {
+      if (Object.keys(request.config).some((key) => !["modelId", "thinkingOptionId"].includes(key)))
+        throw Error("Only model and reasoning can be changed");
+      update = request.config;
+    } else
+      update =
+        request.type === "set_agent_model_request"
+          ? { modelId: request.modelId }
+          : { thinkingOptionId: request.thinkingOptionId };
+    const modelId = update.modelId || current.modelId;
+    const model = studentModels(await modelsFor(student)).find((item) => item.id === modelId);
+    const thinkingOptionId =
+      update.thinkingOptionId ||
+      (model?.thinkingOptions.some((item) => item.id === current.thinkingOptionId)
+        ? current.thinkingOptionId
+        : model?.defaultThinkingOptionId);
+    await applySettings(student, { agentId: request.agentId, modelId, thinkingOptionId });
+    return {
+      type: request.type.replace("request", "response"),
+      payload: {
+        requestId: request.requestId,
+        agentId: request.agentId,
+        accepted: true,
+        error: null,
+      },
+    };
+  }
+  async function handleNativeCreation(student, request) {
+    const options = nativeCreation(request, student, await modelsFor(student));
+    const fingerprint = createHash("sha256").update(JSON.stringify(options)).digest("hex");
+    const prior = conversationRecords
+      .get(student.id)
+      .find((item) => item.idempotencyKey === options.idempotencyKey);
+    if (prior?.fingerprint && prior.fingerprint !== fingerprint)
+      throw Error("A retry cannot change the original chat request");
+    if (prior)
+      return {
+        type: "agent.create.response",
+        payload: {
+          requestId: request.requestId,
+          agent: await metadataFor(student, prior.agentId),
+          error: null,
+        },
+      };
+    if (conversationCreationLocks.has(student.id))
+      throw Error("A new chat is already being created");
+    conversationCreationLocks.add(student.id);
+    try {
+      if (conversationRecords.get(student.id).length >= 19)
+        throw Error("You have reached the 20 chat limit");
+      const last = conversationCreatedAt.get(student.id);
+      if (last && Date.now() - Date.parse(last) < 60000)
+        throw Error("Wait one minute before creating another chat");
+      const quota = limits.prompt(student);
+      if (quota) throw Error(quota);
+      return await prepareConversation(student, "new", async () => {
+        const identity = createHash("sha256")
+          .update(student.id + ":" + options.idempotencyKey)
+          .digest("hex");
+        options.agentId ||= `${identity.slice(0, 8)}-${identity.slice(8, 12)}-4${identity.slice(13, 16)}-a${identity.slice(17, 20)}-${identity.slice(20, 32)}`;
+        const promptRequest = {
+          ...request,
+          agentId: options.agentId,
+          messageId: request.clientMessageId,
+        };
+        const images = await persistImages(promptRequest, student, config);
+        options.images = promptRequest.images;
+        appendFileSync(
+          join(config.recordsDir, `${student.id}.requests.jsonl`),
+          JSON.stringify({
+            receivedAt: new Date().toISOString(),
+            agentId: options.agentId,
+            message: {
+              type: "send_agent_message_request",
+              agentId: options.agentId,
+              text: options.initialPrompt,
+              clientMessageId: options.clientMessageId,
+              images,
+            },
+            documents: documentRecords(config, student).map(
+              ({ id, name, mimeType, bytes, kind }) => ({ id, name, mimeType, bytes, kind }),
+            ),
+            settings: {
+              modelId: options.config.model,
+              thinkingOptionId: options.config.thinkingOptionId,
+            },
+          }) + "\n",
+          { mode: 0o600 },
+        );
+        // Native creation receipts preserve retry identity and create-and-prompt behavior.
+        const result = await clients.get(student.id).creations.createAgent(options);
+        if (!result.agent || result.error) throw Error(result.error || "Could not create chat");
+        const agent = result.agent;
+        activeConversations.set(student.id, agent.id);
+        const createdAt = new Date().toISOString();
+        conversationRecords.get(student.id).push({
+          agentId: agent.id,
+          title: agent.title || "新对话",
+          createdAt,
+          idempotencyKey: options.idempotencyKey,
+          fingerprint,
+        });
+        saveConversations(student, createdAt);
+        return {
+          type: "agent.create.response",
+          payload: {
+            requestId: request.requestId,
+            agent,
+            error: null,
+            ...(result.creation ? { creation: result.creation } : {}),
+          },
+        };
+      });
+    } finally {
+      conversationCreationLocks.delete(student.id);
+    }
   }
   async function handleLogin(request, response) {
     const input = await jsonBody(request);
@@ -347,98 +636,6 @@ export async function startGateway(config) {
             serverId: student.serverId,
             model: config.model,
           }),
-      },
-    ],
-    [
-      "GET /study/conversations",
-      {
-        method: "GET",
-        run: async (_request, response, { student }) => {
-          const owned = [
-            {
-              agentId: student.agentId,
-              title: "水杯设计研究 / Cup design study",
-              createdAt: null,
-              readonly: false,
-            },
-            ...conversationRecords
-              .get(student.id)
-              .map((item) => Object.assign({}, item, { readonly: false })),
-          ];
-          const transcriptPath = join(config.recordsDir, `${student.id}.transcript.json`);
-          const saved = existsSync(transcriptPath)
-            ? JSON.parse(readFileSync(transcriptPath, "utf8"))
-            : null;
-          const history = [
-            ...new Set([
-              ...(student.historicalAgentIds || []),
-              ...(student.preservedAgentIds || []),
-            ]),
-          ]
-            .filter((agentId) => !owned.some((item) => item.agentId === agentId))
-            .map((agentId) => ({
-              agentId,
-              title:
-                saved?.conversations?.find((item) => item.agentId === agentId)?.title ||
-                "Previous conversation",
-              createdAt:
-                saved?.conversations?.find((item) => item.agentId === agentId)?.createdAt || null,
-              readonly: true,
-            }));
-          const preserved = (saved?.conversations || [])
-            .filter(
-              (item) =>
-                !owned.some((ownedItem) => ownedItem.agentId === item.agentId) &&
-                !history.some((historyItem) => historyItem.agentId === item.agentId),
-            )
-            .map((item) => ({
-              agentId: item.agentId,
-              title: item.title || "Previous conversation",
-              createdAt: item.createdAt || null,
-              readonly: true,
-            }));
-          return reply(response, 200, { conversations: [...owned, ...history, ...preserved] });
-        },
-      },
-    ],
-    [
-      "POST /study/conversations",
-      {
-        method: "POST",
-        run: async (request, response, { student }) => {
-          const input = await jsonBody(request);
-          if (conversationCreationLocks.has(student.id))
-            return reply(response, 429, { error: "A new chat is already being created" });
-          conversationCreationLocks.add(student.id);
-          try {
-            let title =
-              (typeof input.title === "string" ? input.title.trim() : "").slice(0, 80) ||
-              "New chat";
-            if (title === "New chat")
-              title = "新对话 / New chat " + (conversationRecords.get(student.id).length + 2);
-            if (conversationRecords.get(student.id).length >= 19)
-              return reply(response, 409, { error: "You have reached the 20 chat limit" });
-            const lastCreatedAt = conversationCreatedAt.get(student.id);
-            if (lastCreatedAt && Date.now() - Date.parse(lastCreatedAt) < 60000)
-              return reply(response, 429, {
-                error: "Wait one minute before creating another chat",
-              });
-            await prepareConversation(student, "new");
-            const agent = await clients.get(student.id).createAgent({
-              workspaceId: student.workspaceId,
-              config: { ...studyAgentConfig(), title },
-              labels: { "study.student": student.id, "study.conversation": "true" },
-            });
-            activeConversations.set(student.id, agent.id);
-            const createdAt = new Date().toISOString();
-            const conversation = { agentId: agent.id, title: agent.title || title, createdAt };
-            conversationRecords.get(student.id).push(conversation);
-            saveConversations(student, createdAt);
-            return reply(response, 201, { ...conversation, readonly: false });
-          } finally {
-            conversationCreationLocks.delete(student.id);
-          }
-        },
       },
     ],
     [
@@ -630,6 +827,7 @@ export async function startGateway(config) {
         });
       }),
       annotations: annotations(student),
+      settingChanges: settingChanges(student),
       submittedImages: imageRecords(config, student),
       generatedImages: generatedImageRecords(config, student),
       submittedDocuments: documentRecords(config, student).filter((file) => file.kind === "upload"),
@@ -671,6 +869,21 @@ export async function startGateway(config) {
     if (request.method !== "GET") return reply(response, 405, { error: "Method not allowed" });
     if (pathname === "/study/admin")
       return reply(response, 200, adminHtml, { "Content-Type": "text/html; charset=utf-8" });
+    if (pathname === "/study/admin/session") {
+      const agentId = new URL(request.url, "http://study.local").searchParams.get("agentId");
+      const owner = [...students.values()].find((student) =>
+        [
+          student.agentId,
+          ...student.ownedConversationIds,
+          ...(student.historicalAgentIds || []),
+          ...(student.preservedAgentIds || []),
+        ].includes(agentId),
+      );
+      if (!owner) return reply(response, 404, { error: "Session not found" });
+      const data = researchSession(await exportStudent(owner, "/study/admin/output/"), agentId);
+      if (!data) return reply(response, 404, { error: "Session not found" });
+      return reply(response, 200, data);
+    }
     const selected = students.get(
       new URL(request.url, "http://study.local").searchParams.get("studentId"),
     );
@@ -824,6 +1037,7 @@ export async function startGateway(config) {
   });
   installProxy({
     prepareConversation,
+    handleStudentRequest,
     server,
     config,
     authenticate,
@@ -831,6 +1045,7 @@ export async function startGateway(config) {
     sessions,
     socketPairs,
     limits,
+    getConversationSettings: settingsFor,
     onAssistantTimeline: (student, entries) => archiveImages(student, entries).catch(() => {}),
   });
   await new Promise((accept) => server.listen(config.port || 0, "127.0.0.1", accept));

@@ -37,6 +37,18 @@ export function formatThinkingOptionLabel(option: ControlLabelInput): string {
   const compactId = option.id.replace(/[\s_-]+/g, "").toLowerCase();
   const compactLabel = rawLabel.replace(/[\s_-]+/g, "").toLowerCase();
 
+  if (i18n.language.startsWith("zh")) {
+    const levels: Record<string, string> = {
+      minimal: "最小",
+      low: "低",
+      medium: "中",
+      high: "高",
+      max: "最高",
+      ultra: "极限",
+    };
+    if (levels[compactId]) return levels[compactId];
+  }
+
   if (compactId === "xhigh" || compactLabel === "xhigh") {
     return i18n.t("agentControls.thinking.extraHigh");
   }

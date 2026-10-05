@@ -1,3 +1,4 @@
+import { assignStudentAccount } from "./account-pool.mjs";
 import { ensureAdmin } from "./admin-account.mjs";
 import { once } from "node:events";
 import { execFileSync } from "node:child_process";
@@ -47,7 +48,7 @@ try {
       mkdirSync(path, { recursive: true, mode: 0o700 });
     writeFileSync(
       join(workspace, "design-brief.md"),
-      "设计任务：为老年人设计一款水杯。记录你的分析、选择与修改。\nDesign a drinking cup for older adults. Document your analysis, choices, and revisions.\n",
+      "请根据老师布置的设计任务开展工作，并记录你的分析、选择与修改。\nWork on the design task assigned by your teacher. Record your analysis, choices and revisions.\n",
     );
     writeFileSync(
       join(paseoHome, "config.json"),
@@ -68,9 +69,24 @@ try {
     const name = `lulu-study-${randomBytes(4).toString("hex")}-${id}`;
     const liveMounts = [];
     if (mode === "live") {
-      if (!process.env.STUDY_CODEX_BINARY || !process.env.STUDY_CODEX_AUTH)
+      if (
+        !process.env.STUDY_CODEX_BINARY ||
+        !(process.env.STUDY_CODEX_AUTH || process.env.STUDY_ACCOUNT_POOL)
+      )
         throw new Error("Live smoke requires STUDY_CODEX_BINARY and STUDY_CODEX_AUTH paths");
-      copyFileSync(process.env.STUDY_CODEX_AUTH, join(codexHome, "auth.json"));
+      const account = process.env.STUDY_ACCOUNT_POOL
+        ? assignStudentAccount(process.env.STUDY_ACCOUNT_POOL, id)
+        : null;
+      copyFileSync(
+        account ? account.authFile : process.env.STUDY_CODEX_AUTH,
+        join(codexHome, "auth.json"),
+      );
+      if (account)
+        writeFileSync(
+          join(studentRoot, "account-route.json"),
+          JSON.stringify({ account: account.id }),
+          { mode: 0o600 },
+        );
       writeFileSync(
         join(codexHome, "config.toml"),
         studyCodexConfig({ publicUrl: process.env.STUDY_PUBLIC_URL || "" }),
@@ -179,7 +195,7 @@ try {
     try {
       const created = await client.createWorkspace({
         source: { kind: "directory", path: "/workspace" },
-        title: "水杯设计 / Cup design",
+        title: "设计研究 / Design study",
       });
       if (!created.workspace) throw new Error(created.error || "Workspace creation failed");
       const config =
@@ -197,7 +213,7 @@ try {
           : studyAgentConfig();
       const agent = await client.createAgent({
         workspaceId: created.workspace.id,
-        config: { ...config, title: "水杯设计研究 / Cup design study" },
+        config: { ...config, title: "设计对话 / Design chat" },
         labels: { "study.student": id },
       });
       const status = await fetch(`http://127.0.0.1:${port}/api/status`, {
