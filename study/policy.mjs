@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { validImages } from "./images.mjs";
+import { isRegisteredNativeAttachment, validateNativeUploadRequest } from "./native-uploads.mjs";
 
 export const Annotation = z
   .object({
@@ -62,7 +63,7 @@ const ACTIONS = new Set([
 ]);
 const CREATIONS = new Set(["agent.create.request"]);
 
-export function studentMessage(message, student) {
+export function studentMessage(message, student, nativeDocuments = []) {
   if (message.type === "hello") {
     return {
       ...message,
@@ -73,11 +74,13 @@ export function studentMessage(message, student) {
   if (message.type === "ping") return message;
   if (message.type !== "session") return null;
   const request = message.message;
-  if (!request || !requestAllowed(request, student)) return null;
+  if (request?.type === "file.upload.request")
+    return validateNativeUploadRequest(request) ? message : null;
+  if (!request || !requestAllowed(request, student, nativeDocuments)) return null;
   return message;
 }
 
-function requestAllowed(request, student) {
+function requestAllowed(request, student, nativeDocuments) {
   if (!(READS.has(request.type) || ACTIONS.has(request.type) || CREATIONS.has(request.type)))
     return false;
   const ownAgents = [student.agentId, ...(student.ownedConversationIds || [])];
@@ -99,15 +102,21 @@ function requestAllowed(request, student) {
     allTargetsAreOwned &&
     workspaceIsOwned &&
     cwdIsOwned &&
-    validAction(request)
+    validAction(request, nativeDocuments)
   );
 }
 
-function validAction(request) {
+function validAction(request, nativeDocuments) {
   if (request.type === "send_agent_message_request") {
     if (typeof request.text !== "string" || request.text.length > 32000) return false;
-    // Path-based attachments require their own ownership checks before enabling.
-    if (request.attachments?.length || !validImages(request.images)) return false;
+    if (!validImages(request.images)) return false;
   }
+  if (request.type === "agent.create.request" || request.type === "send_agent_message_request")
+    return (
+      Array.isArray(request.attachments || []) &&
+      (request.attachments || []).every((attachment) =>
+        isRegisteredNativeAttachment(attachment, nativeDocuments),
+      )
+    );
   return true;
 }

@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { join, resolve, basename, extname, dirname } from "node:path";
 
-export const DOCUMENT_LIMITS = { fileBytes: 8 * 1024 * 1024, studentBytes: 100 * 1024 * 1024 };
+export const DOCUMENT_LIMITS = { fileBytes: 10 * 1024 * 1024, studentBytes: 100 * 1024 * 1024 };
 const types = {
   ".pdf": "application/pdf",
   ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -26,6 +26,11 @@ const types = {
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
 };
+export function nativeDocumentMimeType(name) {
+  const extension = extname(name).toLowerCase();
+  if ([".png", ".jpg", ".jpeg", ".webp"].includes(extension)) return null;
+  return types[extension] || null;
+}
 export function studentWorkspace(config, student) {
   return student.workspacePath || join(dirname(config.recordsDir), student.id, "workspace");
 }
@@ -46,7 +51,7 @@ function validate(name, bytes, kind) {
   )
     throw Error("Use PDF, DOCX, XLSX, PPTX, TXT, MD, CSV or JSON files");
   if (!bytes.length || bytes.length > DOCUMENT_LIMITS.fileBytes)
-    throw Error("Each file must be under 8 MiB");
+    throw Error("Each file must be 10 MiB or less");
   if (extension === ".pdf" && !bytes.subarray(0, 5).equals(Buffer.from("%PDF-")))
     throw Error("Invalid PDF file");
   if (
@@ -77,7 +82,16 @@ export function registerDocument(config, student, name, bytes, kind = "upload", 
     .update(bytes)
     .digest("hex");
   const existing = previous.find((item) => item.id === id);
-  if (existing) return existing;
+  if (existing) {
+    if (!details.nativeUploadId) return existing;
+    const linkedRecord = { ...existing, ...details };
+    appendFileSync(
+      join(config.recordsDir, `${student.id}.documents.jsonl`),
+      JSON.stringify(linkedRecord) + "\n",
+      { mode: 0o600 },
+    );
+    return linkedRecord;
+  }
   if (
     previous.reduce((sum, record) => sum + record.bytes, 0) + bytes.length >
     DOCUMENT_LIMITS.studentBytes

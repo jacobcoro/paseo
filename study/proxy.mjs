@@ -6,6 +6,7 @@ import { persistImages } from "./images.mjs";
 import { rewriteGeneratedImageMarkdown } from "./outputs.mjs";
 import { filterStudentResponse } from "./native-controls.mjs";
 import { documentRecords } from "./documents.mjs";
+import { createNativeUploadTracker } from "./native-uploads.mjs";
 
 function rewriteImages(text, records, origin) {
   return rewriteGeneratedImageMarkdown(text, records, origin + "/study/output/");
@@ -27,6 +28,46 @@ function deny(browser, message, error) {
     }),
   );
 }
+
+function relayNativeUploadFrame({ raw, browser, upstream, pending, tracker }) {
+  try {
+    tracker.receive(raw);
+  } catch {
+    browser.close(1008, "Unregistered or invalid file transfer");
+    return;
+  }
+  if (upstream.readyState === WebSocket.OPEN) upstream.send(raw, { binary: true });
+  else if (upstream.readyState === WebSocket.CONNECTING && pending.length < 100)
+    pending.push({ data: raw, binary: true });
+  else browser.close(1013, "Try reconnecting");
+}
+
+async function archiveUploadResponse({ message, browser, student, tracker, recordNativeUpload }) {
+  if (message?.type !== "file.upload.response") return false;
+  const requestId = message.payload?.requestId;
+  try {
+    const upload = tracker.complete(requestId, message.payload?.file);
+    if (upload.file && !message.payload?.error)
+      await recordNativeUpload(student, upload.request, upload.file);
+    return false;
+  } catch (error) {
+    tracker.cancel(requestId);
+    deny(
+      browser,
+      { requestId, type: "file.upload.request" },
+      error.message || "Could not archive the uploaded file",
+    );
+    return true;
+  }
+}
+
+function collectAssistantMessages(value, entries) {
+  if (!value || typeof value !== "object") return;
+  if (value.type === "assistant_message" && typeof value.text === "string")
+    entries.push({ item: value });
+  for (const child of Object.values(value)) collectAssistantMessages(child, entries);
+}
+
 export function installProxy({
   server,
   config,
@@ -39,6 +80,7 @@ export function installProxy({
   onAssistantTimeline,
   prepareConversation,
   handleStudentRequest,
+  recordNativeUpload,
 }) {
   const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 12 * 1024 * 1024 });
   server.on("upgrade", (request, socket, head) => {
@@ -55,9 +97,10 @@ export function installProxy({
       const pair = { browser, upstream, token: session.token, studentId: session.studentId };
       socketPairs.add(pair);
       const pending = [];
+      const nativeUploads = createNativeUploadTracker();
       let chain = Promise.resolve();
       upstream.on("open", () => {
-        for (const frame of pending) upstream.send(frame);
+        for (const frame of pending) upstream.send(frame.data, { binary: frame.binary });
         pending.length = 0;
       });
       async function prepare(allowed) {
@@ -89,13 +132,83 @@ export function installProxy({
         }
         return filterStudentResponse(message);
       }
+      async function prepareAllowedMessage(allowed) {
+        if (allowed.message.type === "file.upload.request") {
+          try {
+            nativeUploads.begin(allowed.message);
+          } catch (error) {
+            deny(browser, allowed.message, error.message);
+            return false;
+          }
+        }
+        try {
+          const handled = await handleStudentRequest(session.student, allowed.message);
+          if (handled) {
+            browser.send(
+              JSON.stringify({ type: "session", message: await archiveHandled(handled) }),
+            );
+            return false;
+          }
+        } catch (error) {
+          deny(browser, allowed.message, error.message);
+          return false;
+        }
+        return prepare(allowed);
+      }
+      async function recordPrompt(allowed) {
+        const quotaError = limits.prompt(session.student);
+        if (quotaError) {
+          deny(browser, allowed.message, quotaError);
+          return false;
+        }
+        let images;
+        try {
+          images = await persistImages(allowed.message, session.student, config);
+        } catch (error) {
+          deny(browser, allowed.message, error.message);
+          return false;
+        }
+        appendFileSync(
+          join(config.recordsDir, `${session.studentId}.requests.jsonl`),
+          JSON.stringify({
+            receivedAt: new Date().toISOString(),
+            agentId: allowed.message.agentId,
+            message: { ...allowed.message, images },
+            documents: documentRecords(config, session.student).map((document) => {
+              const result = {
+                id: document.id,
+                name: document.name,
+                mimeType: document.mimeType,
+                bytes: document.bytes,
+                kind: document.kind,
+              };
+              if (document.nativeUploadId) {
+                result.nativeUploadId = document.nativeUploadId;
+                result.nativePath = document.nativePath;
+              }
+              return result;
+            }),
+            settings: await getConversationSettings(session.student, allowed.message.agentId),
+          }) + "\n",
+          { mode: 0o600 },
+        );
+        return true;
+      }
       async function handle(raw, binary) {
-        if (binary || !sessions.has(session.token) || session.expires < Date.now()) {
-          browser.close(1008, "Session expired or unsupported message");
+        if (!sessions.has(session.token) || session.expires < Date.now()) {
+          browser.close(1008, "Session expired");
+          return;
+        }
+        if (binary) {
+          relayNativeUploadFrame({ raw, browser, upstream, pending, tracker: nativeUploads });
           return;
         }
         const original = JSON.parse(raw.toString());
-        const allowed = studentMessage(original, session.student);
+        const allowed = studentMessage(
+          original,
+          session.student,
+          documentRecords(config, session.student),
+        );
         if (!allowed) {
           appendFileSync(
             join(config.recordsDir, `${session.studentId}.denied.jsonl`),
@@ -112,52 +225,19 @@ export function installProxy({
           );
           return;
         }
-        try {
-          const handled = await handleStudentRequest(session.student, allowed.message);
-          if (handled) {
-            browser.send(
-              JSON.stringify({ type: "session", message: await archiveHandled(handled) }),
-            );
-            return;
-          }
-        } catch (error) {
-          deny(browser, allowed.message, error.message);
+        if (!(await prepareAllowedMessage(allowed))) return;
+        if (
+          allowed.type === "session" &&
+          allowed.message.type === "send_agent_message_request" &&
+          !(await recordPrompt(allowed))
+        )
           return;
-        }
-        if (!(await prepare(allowed))) return;
-        if (allowed.type === "session" && allowed.message.type === "send_agent_message_request") {
-          const quotaError = limits.prompt(session.student);
-          if (quotaError) {
-            deny(browser, allowed.message, quotaError);
-            return;
-          }
-          let images;
-          try {
-            images = await persistImages(allowed.message, session.student, config);
-          } catch (error) {
-            deny(browser, allowed.message, error.message);
-            return;
-          }
-          appendFileSync(
-            join(config.recordsDir, `${session.studentId}.requests.jsonl`),
-            JSON.stringify({
-              receivedAt: new Date().toISOString(),
-              agentId: allowed.message.agentId,
-              message: { ...allowed.message, images },
-              documents: documentRecords(config, session.student).map(
-                ({ id, name, mimeType, bytes, kind }) => ({ id, name, mimeType, bytes, kind }),
-              ),
-              settings: await getConversationSettings(session.student, allowed.message.agentId),
-            }) + "\n",
-            { mode: 0o600 },
-          );
-        }
         if (allowed.message?.type === "get_providers_snapshot_request")
           delete allowed.message.ifNoneMatch;
         const frame = JSON.stringify(allowed);
-        if (upstream.readyState === WebSocket.OPEN) upstream.send(frame);
+        if (upstream.readyState === WebSocket.OPEN) upstream.send(frame, { binary: false });
         else if (upstream.readyState === WebSocket.CONNECTING && pending.length < 100)
-          pending.push(frame);
+          pending.push({ data: frame, binary: false });
         else browser.close(1013, "Try reconnecting");
       }
       let queued = 0;
@@ -187,35 +267,42 @@ export function installProxy({
       function outputDelivered(size) {
         queuedOutputBytes -= size;
       }
+      async function forwardEnvelope(raw) {
+        const envelope = JSON.parse(raw.toString());
+        const message = envelope.type === "session" ? envelope.message : envelope;
+        filterStudentResponse(message);
+        if (
+          await archiveUploadResponse({
+            message,
+            browser,
+            student: session.student,
+            tracker: nativeUploads,
+            recordNativeUpload,
+          })
+        )
+          return;
+        if (message?.type === "rpc_error" && message.payload?.requestType === "file.upload.request")
+          nativeUploads.cancel(message.payload.requestId);
+        const payload = message?.payload || message;
+        const ownedAgents = [
+          session.student.agentId,
+          ...(session.student.ownedConversationIds || []),
+          ...(session.student.historicalAgentIds || []),
+          ...(session.student.preservedAgentIds || []),
+        ];
+        const entries = [];
+        if (ownedAgents.includes(payload?.agentId)) collectAssistantMessages(payload, entries);
+        if (entries.length && onAssistantTimeline) {
+          const records = await onAssistantTimeline(session.student, entries);
+          for (const entry of entries)
+            entry.item.text = rewriteImages(entry.item.text, records || [], origin);
+        }
+        if (browser.readyState === WebSocket.OPEN) browser.send(JSON.stringify(envelope));
+      }
       async function forward(raw, binary) {
         if (!binary) {
           try {
-            const envelope = JSON.parse(raw.toString());
-            const message = envelope.type === "session" ? envelope.message : envelope;
-            filterStudentResponse(message);
-            const payload = message?.payload || message;
-            const ownedAgents = [
-              session.student.agentId,
-              ...(session.student.ownedConversationIds || []),
-              ...(session.student.historicalAgentIds || []),
-              ...(session.student.preservedAgentIds || []),
-            ];
-            const entries = [];
-            function collect(value) {
-              if (!value || typeof value !== "object") return;
-              if (value.type === "assistant_message" && typeof value.text === "string")
-                entries.push({ item: value });
-              for (const child of Object.values(value)) collect(child);
-            }
-            if (ownedAgents.includes(payload?.agentId)) collect(payload);
-            if (entries.length && onAssistantTimeline) {
-              const records = await onAssistantTimeline(session.student, entries);
-              for (const entry of entries)
-                entry.item.text = rewriteImages(entry.item.text, records || [], origin);
-              if (browser.readyState === WebSocket.OPEN) browser.send(JSON.stringify(envelope));
-              return;
-            }
-            if (browser.readyState === WebSocket.OPEN) browser.send(JSON.stringify(envelope));
+            await forwardEnvelope(raw);
             return;
           } catch {}
         }

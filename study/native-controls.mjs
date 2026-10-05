@@ -2,6 +2,7 @@ import { z } from "zod";
 import { studyAgentConfig, studyModel, studyReasoning } from "./chat-profile.mjs";
 import { validImages } from "./images.mjs";
 import { studentModels, validModelSettings } from "./model-settings.mjs";
+import { isRegisteredNativeAttachment } from "./native-uploads.mjs";
 
 const Creation = z
   .object({
@@ -25,11 +26,14 @@ const Creation = z
 
 // Native UI owns drafts, tabs and model selection. Only the trusted study profile
 // reaches the daemon; client-supplied tools, environment and worktrees do not.
-export function nativeCreation(request, student, models) {
+export function nativeCreation(request, student, models, nativeDocuments = []) {
   const input = Creation.parse(request);
   if (
     input.workspaceId !== student.workspaceId ||
-    input.attachments?.length ||
+    !Array.isArray(input.attachments || []) ||
+    !(input.attachments || []).every((attachment) =>
+      isRegisteredNativeAttachment(attachment, nativeDocuments),
+    ) ||
     !validImages(input.images)
   )
     throw Error("This chat or attachment is unavailable");
@@ -50,6 +54,7 @@ export function nativeCreation(request, student, models) {
     initialPrompt: input.initialPrompt,
     clientMessageId: input.clientMessageId,
     ...(input.images ? { images: input.images } : {}),
+    ...(input.attachments?.length ? { attachments: input.attachments } : {}),
     labels: { "study.student": student.id, "study.conversation": "true" },
   };
 }
