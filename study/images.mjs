@@ -10,6 +10,21 @@ export const IMAGE_LIMITS = {
 };
 const formats = { "image/png": "png", "image/jpeg": "jpeg", "image/webp": "webp" };
 let decoding = 0;
+const waiting = [];
+async function acquireDecoder() {
+  if (decoding < 4) {
+    decoding++;
+    return;
+  }
+  // Bound retained uploads while allowing a classroom to share four decoders.
+  if (waiting.length >= 64) throw new Error("Image processing is busy. Please retry.");
+  await new Promise((resolve) => waiting.push(resolve));
+}
+function releaseDecoder() {
+  const next = waiting.shift();
+  if (next) next();
+  else decoding--;
+}
 export function validImages(images) {
   if (images === undefined) return true;
   if (!Array.isArray(images) || images.length > IMAGE_LIMITS.count) return false;
@@ -34,8 +49,7 @@ export function imageRecords(config, student) {
 }
 export async function persistImages(request, student, config) {
   if (!request.images?.length) return [];
-  if (decoding >= 4) throw new Error("Image processing is busy. Please retry.");
-  decoding++;
+  await acquireDecoder();
   try {
     const processed = [];
     for (const image of request.images) {
@@ -102,7 +116,7 @@ export async function persistImages(request, student, config) {
     }));
     return records;
   } finally {
-    decoding--;
+    releaseDecoder();
   }
 }
 export function imageFile(config, student, id) {

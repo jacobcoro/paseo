@@ -40,3 +40,46 @@ test("corrupt raster, wrong MIME, excessive dimensions, and active SVG cannot be
   );
   assert.equal(imageRecords(config, student).length, 0);
 });
+
+test("sixty students can upload together and each original is recorded", async () => {
+  const png = await sharp({ create: { width: 8, height: 8, channels: 3, background: "#fff" } })
+    .png()
+    .toBuffer();
+  await Promise.all(
+    Array.from({ length: 60 }, async (_, index) => {
+      const concurrentStudent = { id: `concurrent-${index}` };
+      const records = await persistImages(
+        {
+          messageId: `image-${index}`,
+          images: [{ data: png.toString("base64"), mimeType: "image/png" }],
+        },
+        concurrentStudent,
+        config,
+      );
+      assert.equal(records.length, 1);
+      assert.equal(imageRecords(config, concurrentStudent)[0].clientMessageId, `image-${index}`);
+    }),
+  );
+});
+
+test("the upload queue rejects overflow and releases slots after invalid images", async () => {
+  const requests = Array.from({ length: 69 }, (_, index) =>
+    persistImages(
+      { images: [{ data: Buffer.from("invalid PNG").toString("base64"), mimeType: "image/png" }] },
+      { id: `invalid-${index}` },
+      config,
+    ),
+  );
+  const results = await Promise.allSettled(requests);
+  assert.equal(results.filter((result) => result.reason?.message.includes("busy")).length, 1);
+  assert.ok(results.every((result) => result.status === "rejected"));
+  const png = await sharp({ create: { width: 8, height: 8, channels: 3, background: "#fff" } })
+    .png()
+    .toBuffer();
+  const records = await persistImages(
+    { images: [{ data: png.toString("base64"), mimeType: "image/png" }] },
+    { id: "after-invalid" },
+    config,
+  );
+  assert.equal(records.length, 1);
+});
