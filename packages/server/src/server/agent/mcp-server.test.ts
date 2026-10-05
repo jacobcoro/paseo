@@ -6319,3 +6319,65 @@ describe("agent snapshot MCP serialization", () => {
     expect(content).not.toContain("first answer");
   });
 });
+
+describe("release_idle_agent MCP tool", () => {
+  it.each([
+    { lastUserMessageAt: null, clear: true },
+    { lastUserMessageAt: "2026-10-05T10:00:00.000Z", clear: false },
+    { lastUserMessageAt: undefined, clear: false },
+  ])(
+    "clears only confirmed empty Codex handles after the runtime is absent: $clear",
+    async ({ lastUserMessageAt, clear }) => {
+      const { agentManager, agentStorage, spies } = createTestDeps();
+      spies.agentManager.getAgent.mockReturnValue(null);
+      const record = {
+        id: "empty-chat",
+        provider: "codex",
+        lastUserMessageAt,
+        persistence: { provider: "codex", sessionId: "no-rollout" },
+      };
+      spies.agentStorage.get.mockResolvedValue(record);
+      const server = await createAgentMcpServer({
+        agentManager,
+        agentStorage,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        logger: createTestLogger(),
+      });
+      try {
+        const result = await registeredTool(server, "release_idle_agent").handler({
+          agentId: record.id,
+        });
+        expect(result.structuredContent.success).toBe(true);
+        if (clear)
+          expect(spies.agentStorage.upsert).toHaveBeenCalledWith({ ...record, persistence: null });
+        else expect(spies.agentStorage.upsert).not.toHaveBeenCalled();
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
+  it("refuses to release an active turn", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    spies.agentManager.getAgent.mockReturnValue({
+      lifecycle: "running",
+      lastUserMessageAt: null,
+      provider: "codex",
+    });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      logger: createTestLogger(),
+    });
+    try {
+      const result = await registeredTool(server, "release_idle_agent").handler({
+        agentId: "busy-chat",
+      });
+      expect(result.structuredContent.success).toBe(false);
+      expect(spies.agentStorage.upsert).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
+  });
+});

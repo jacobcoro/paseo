@@ -87,7 +87,12 @@ export function filterStudentResponse(message) {
   }
   function removeFeatures(value) {
     if (!value || typeof value !== "object") return;
-    if (value.provider === "codex" && typeof value.id === "string" && "status" in value) {
+    if (
+      value.provider === "codex" &&
+      typeof value.id === "string" &&
+      typeof value.cwd === "string" &&
+      "status" in value
+    ) {
       value.features = [];
       value.availableModes = [];
     }

@@ -2171,15 +2171,12 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       ) {
         return { content: [], structuredContent: ensureValidJson({ success: false }) };
       }
-      if (agent) {
-        const empty = agent.lastUserMessageAt === null;
-        await closeAgentCommand({ agentManager }, agentId);
-        // Codex does not write a rollout for a thread with no user turn. Such a
-        // conversation must start from its saved config when opened again.
-        if (empty && agent.provider === "codex") {
-          const record = await agentStorage.get(agentId);
-          if (record) await agentStorage.upsert({ ...record, persistence: null });
-        }
+      if (agent) await closeAgentCommand({ agentManager }, agentId);
+      // Failed resume may already have removed the runtime. Inspect the durable
+      // record too: Codex never writes a rollout for a thread without a user turn.
+      const record = await agentStorage.get(agentId);
+      if (record?.provider === "codex" && record.lastUserMessageAt === null) {
+        await agentStorage.upsert({ ...record, persistence: null });
       }
       return { content: [], structuredContent: ensureValidJson({ success: true }) };
     },
