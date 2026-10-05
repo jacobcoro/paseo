@@ -3,6 +3,11 @@ import { join } from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
 import { studentMessage } from "./policy.mjs";
 import { persistImages } from "./images.mjs";
+import { rewriteGeneratedImageMarkdown } from "./outputs.mjs";
+
+function rewriteImages(text, records, origin) {
+  return rewriteGeneratedImageMarkdown(text, records, origin + "/study/output/");
+}
 function deny(browser, message, error) {
   if (!message?.requestId || browser.readyState !== WebSocket.OPEN) return;
   browser.send(
@@ -28,6 +33,7 @@ export function installProxy({
   sessions,
   socketPairs,
   limits,
+  onAssistantTimeline,
 }) {
   const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 12 * 1024 * 1024 });
   server.on("upgrade", (request, socket, head) => {
@@ -121,8 +127,54 @@ export function installProxy({
           .catch(invalid)
           .finally(dequeue);
       });
-      upstream.on("message", (raw, binary) => {
+      const origin = `${request.headers["x-forwarded-proto"] === "https" ? "https" : "http"}://${request.headers.host}`;
+      let outputChain = Promise.resolve();
+      let queuedOutputBytes = 0;
+      function outputDelivered(size) {
+        queuedOutputBytes -= size;
+      }
+      async function forward(raw, binary) {
+        if (!binary && onAssistantTimeline) {
+          try {
+            const envelope = JSON.parse(raw.toString());
+            const message = envelope.type === "session" ? envelope.message : envelope;
+            const payload = message?.payload || message;
+            const ownedAgents = [
+              session.student.agentId,
+              ...(session.student.historicalAgentIds || []),
+            ];
+            const entries = [];
+            function collect(value) {
+              if (!value || typeof value !== "object") return;
+              if (value.type === "assistant_message" && typeof value.text === "string")
+                entries.push({ item: value });
+              for (const child of Object.values(value)) collect(child);
+            }
+            if (ownedAgents.includes(payload?.agentId)) collect(payload);
+            if (entries.length) {
+              const records = await onAssistantTimeline(session.student, entries);
+              for (const entry of entries)
+                entry.item.text = rewriteImages(entry.item.text, records || [], origin);
+              if (browser.readyState === WebSocket.OPEN) browser.send(JSON.stringify(envelope));
+              return;
+            }
+          } catch {}
+        }
         if (browser.readyState === WebSocket.OPEN) browser.send(raw, { binary });
+      }
+      function outputFailed() {
+        browser.close(1011, "Image delivery failed; reconnect");
+      }
+      upstream.on("message", (raw, binary) => {
+        queuedOutputBytes += raw.length;
+        if (queuedOutputBytes > 8 * 1024 * 1024) {
+          browser.close(1013, "Connection fell behind; reconnect to load saved replies");
+          return;
+        }
+        outputChain = outputChain
+          .then(forward.bind(null, raw, binary))
+          .catch(outputFailed)
+          .finally(outputDelivered.bind(null, raw.length));
       });
       upstream.on("error", () => browser.close(1011, "Student runtime unavailable"));
       browser.on("error", () => upstream.close());
