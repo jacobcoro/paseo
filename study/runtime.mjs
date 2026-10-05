@@ -7,6 +7,12 @@ import { mkdirSync, writeFileSync, existsSync, copyFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { passwordHash } from "./gateway.mjs";
+import {
+  studyAgentConfig,
+  studyCodexConfig,
+  studyInstructions,
+  studyModel,
+} from "./chat-profile.mjs";
 
 async function canConnect(url, password) {
   const socket = new WebSocket(url, { headers: { Authorization: `Bearer ${password}` } });
@@ -47,7 +53,8 @@ try {
       join(paseoHome, "config.json"),
       JSON.stringify({
         version: 1,
-        daemon: { relay: { enabled: false } },
+        daemon: { relay: { enabled: false }, mcp: { injectIntoAgents: false } },
+        agents: { providers: { codex: { paseoTools: { enabled: false } } } },
         features: {
           webUi: { enabled: false },
           dictation: { enabled: false },
@@ -64,10 +71,8 @@ try {
       if (!process.env.STUDY_CODEX_BINARY || !process.env.STUDY_CODEX_AUTH)
         throw new Error("Live smoke requires STUDY_CODEX_BINARY and STUDY_CODEX_AUTH paths");
       copyFileSync(process.env.STUDY_CODEX_AUTH, join(codexHome, "auth.json"));
-      writeFileSync(
-        join(codexHome, "config.toml"),
-        'model = "gpt-6.1-sol"\nmodel_reasoning_effort = "low"\napproval_policy = "never"\nsandbox_mode = "read-only"\nweb_search = "disabled"\n[features]\nshell_tool = false\nmulti_agent = false\napply_patch_freeform = false\n',
-      );
+      writeFileSync(join(codexHome, "config.toml"), studyCodexConfig());
+      writeFileSync(join(codexHome, "study-instructions.md"), studyInstructions, { mode: 0o600 });
       liveMounts.push("-v", `${process.env.STUDY_CODEX_BINARY}:/usr/local/bin/codex:ro`);
     }
     execFileSync(
@@ -180,22 +185,7 @@ try {
                 mockStreamingAssistantIntervalMs: 8,
               },
             }
-          : {
-              provider: "codex",
-              cwd: "/workspace",
-              model: "gpt-6.1-sol",
-              thinkingOptionId: "low",
-              modeId: "auto",
-              providerOptions: {
-                approval_policy: "never",
-                sandbox_mode: "read-only",
-                web_search: "disabled",
-                features: { multi_agent_v2: false },
-              },
-              mcpServers: {},
-              systemPrompt:
-                "You assist a student designing a cup for older adults. Answer in the student's language. The student chooses whether to use your suggestions. Do not execute commands, access credentials, or spawn agents.",
-            };
+          : studyAgentConfig();
       const agent = await client.createAgent({
         workspaceId: created.workspace.id,
         config: { ...config, title: "水杯设计研究 / Cup design study" },
@@ -225,7 +215,7 @@ try {
     JSON.stringify(
       {
         mode,
-        model: mode === "fixture" ? "fixture" : "gpt-6.1-sol",
+        model: mode === "fixture" ? "fixture" : studyModel,
         students,
         recordsDir: join(directory, "records"),
         webDir: join(root, "packages/app/dist"),

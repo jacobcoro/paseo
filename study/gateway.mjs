@@ -20,6 +20,12 @@ import { imageRecords, imageFile } from "./images.mjs";
 import { createLimits } from "./limits.mjs";
 import { installProxy } from "./proxy.mjs";
 import { mergeTranscript } from "./transcript.mjs";
+import {
+  archiveAssistantImages,
+  generatedImageRecords,
+  generatedImageFile,
+  rewriteGeneratedImageMarkdown,
+} from "./outputs.mjs";
 
 function reply(response, status, body, headers = {}) {
   response.writeHead(status, {
@@ -87,6 +93,21 @@ export async function startGateway(config) {
     if (!session || session.expires < Date.now()) return null;
     return { ...session, token, student: students.get(session.studentId) };
   }
+  const archiveImages = (student, entries) =>
+    archiveAssistantImages({
+      config,
+      student,
+      entries,
+      readFile: (path, maxBytes) =>
+        clients
+          .get(student.id)
+          .readFile(
+            path.startsWith("/workspace/") ? "/workspace" : "/",
+            path.startsWith("/workspace/") ? path.slice("/workspace".length) : path,
+            `study-output-${randomUUID()}`,
+            maxBytes,
+          ),
+    });
   function checkOrigin(request) {
     if (!request.headers.origin) return true;
     try {
@@ -126,6 +147,9 @@ export async function startGateway(config) {
       mode: config.mode,
       entries: mergeTranscript(saved?.entries || [], entries),
     };
+    await archiveImages(student, result.entries).catch((error) =>
+      console.error("Generated image archive failed:", error.message),
+    );
     writeFileSync(destination + ".tmp", JSON.stringify(result, null, 2), { mode: 0o600 });
     renameSync(destination + ".tmp", destination);
     return result;
@@ -259,18 +283,39 @@ export async function startGateway(config) {
       },
     ],
   ]);
-  async function exportStudent(student) {
+  async function exportStudent(student, outputBase = "/study/output/") {
+    const saved = await transcript(student);
+    const generatedImages = generatedImageRecords(config, student);
     return {
       schemaVersion: 2,
       exportedAt: new Date().toISOString(),
-      ...(await transcript(student)),
+      ...saved,
+      entries: saved.entries.map((entry) => {
+        if (entry.item?.type !== "assistant_message" || typeof entry.item.text !== "string")
+          return entry;
+        return Object.assign({}, entry, {
+          item: Object.assign({}, entry.item, {
+            text: rewriteGeneratedImageMarkdown(entry.item.text, generatedImages, outputBase),
+          }),
+        });
+      }),
       annotations: annotations(student),
       submittedImages: imageRecords(config, student),
+      generatedImages: generatedImageRecords(config, student),
     };
   }
   function serveImage(response, student, id) {
     const file = imageFile(config, student, id);
     if (!file) return reply(response, 404, { error: "Image not found" });
+    response.writeHead(200, {
+      "Content-Type": file.mimeType,
+      "Cache-Control": "private, no-store",
+    });
+    createReadStream(file.path).pipe(response);
+  }
+  function serveGeneratedImage(response, student, id) {
+    const file = generatedImageFile(config, student, id);
+    if (!file || !existsSync(file.path)) return reply(response, 404, { error: "Image not found" });
     response.writeHead(200, {
       "Content-Type": file.mimeType,
       "Cache-Control": "private, no-store",
@@ -285,20 +330,24 @@ export async function startGateway(config) {
       new URL(request.url, "http://study.local").searchParams.get("studentId"),
     );
     if (pathname === "/study/admin/student" && selected)
-      return reply(response, 200, await exportStudent(selected));
+      return reply(response, 200, await exportStudent(selected, "/study/admin/output/"));
     if (pathname === "/study/admin/image" && selected)
       return serveImage(
         response,
         selected,
         new URL(request.url, "http://study.local").searchParams.get("id"),
       );
+    if (pathname.startsWith("/study/admin/output/") && selected)
+      return serveGeneratedImage(response, selected, pathname.slice("/study/admin/output/".length));
     if (pathname === "/study/admin/export")
       return reply(
         response,
         200,
         {
           schemaVersion: 2,
-          students: await Promise.all([...students.values()].map(exportStudent)),
+          students: await Promise.all(
+            [...students.values()].map((student) => exportStudent(student, "/study/admin/output/")),
+          ),
         },
         { "Content-Disposition": "attachment; filename=lulu-study-results.json" },
       );
@@ -367,6 +416,12 @@ export async function startGateway(config) {
       return reply(response, 403, { error: "Use the researcher view" });
     if (pathname.startsWith("/study/image/"))
       return serveImage(response, session.student, pathname.slice("/study/image/".length));
+    if (pathname.startsWith("/study/output/"))
+      return serveGeneratedImage(
+        response,
+        session.student,
+        pathname.slice("/study/output/".length),
+      );
     const student = session.student;
     const route = researchRoutes.get(pathname);
     if (route) {
@@ -414,7 +469,16 @@ export async function startGateway(config) {
       console.error("Study request failed:", error.message);
     }
   });
-  installProxy({ server, config, authenticate, checkOrigin, sessions, socketPairs, limits });
+  installProxy({
+    server,
+    config,
+    authenticate,
+    checkOrigin,
+    sessions,
+    socketPairs,
+    limits,
+    onAssistantTimeline: (student, entries) => archiveImages(student, entries).catch(() => {}),
+  });
   await new Promise((accept) => server.listen(config.port || 0, "127.0.0.1", accept));
   const maintenance = setInterval(() => {
     for (const [token, session] of sessions)

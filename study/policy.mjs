@@ -46,6 +46,7 @@ const READS = new Set([
   "project.icon.get.request",
   "plugin.catalog.get.request",
   "wait_for_finish_request",
+  "subscription.release.request",
 ]);
 const ACTIONS = new Set(["send_agent_message_request", "cancel_agent_request"]);
 
@@ -61,8 +62,11 @@ export function studentMessage(message, student) {
   if (message.type !== "session") return null;
   const request = message.message;
   if (!request || !(READS.has(request.type) || ACTIONS.has(request.type))) return null;
-  if (request.agentId && request.agentId !== student.agentId) return null;
-  if (request.agentIds && request.agentIds.some((id) => id !== student.agentId)) return null;
+  const ownedAgents = ACTIONS.has(request.type)
+    ? [student.agentId]
+    : [student.agentId, ...(student.historicalAgentIds || [])];
+  if (request.agentId && !ownedAgents.includes(request.agentId)) return null;
+  if (request.agentIds && request.agentIds.some((id) => !ownedAgents.includes(id))) return null;
   if (request.workspaceId && request.workspaceId !== student.workspaceId) return null;
   if (request.cwd && request.cwd !== "/workspace") return null;
   if (!validAction(request)) return null;
