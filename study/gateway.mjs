@@ -24,6 +24,8 @@ import { releaseIdleRuntime } from "./runtime-control.mjs";
 import { researchSession } from "./research-session.mjs";
 import { nativeCreation, savedTimeline } from "./native-controls.mjs";
 import { persistImages } from "./images.mjs";
+import { createResearchArchive, sendResearchArchive } from "./export-archive.mjs";
+import { createRecorder } from "./recorder.mjs";
 import {
   ModelSettingsInput,
   studentModels,
@@ -75,6 +77,8 @@ export async function startGateway(config) {
   const limits = createLimits(config);
   const students = new Map(config.students.map((student) => [student.id, student]));
   const clients = new Map();
+  const recorders = new Map();
+  let exportingArchive = false;
   const conversationRecords = new Map();
   const conversationCreatedAt = new Map();
   const conversationCreationLocks = new Set();
@@ -115,20 +119,7 @@ export async function startGateway(config) {
     });
     await client.connect();
     clients.set(student.id, client);
-    client.on((message) => {
-      if (
-        message.type === "agent_stream" ||
-        message.type === "agent_status" ||
-        message.type === "agent.timeline.replacement"
-      ) {
-        appendFileSync(
-          join(config.recordsDir, `${student.id}.events.jsonl`),
-          JSON.stringify({ recordedAt: new Date().toISOString(), studentId: student.id, message }) +
-            "\n",
-          { mode: 0o600 },
-        );
-      }
-    });
+    recorders.set(student.id, createRecorder(client, config, student));
   }
   const activeConversations = new Map(
     config.students.map((student) => [student.id, student.agentId]),
@@ -147,6 +138,7 @@ export async function startGateway(config) {
   }
   async function prepareConversationUnlocked(student, agentId) {
     const previous = activeConversations.get(student.id);
+    if (previous !== agentId) await recorders.get(student.id).select("new");
     if (previous && previous !== agentId) await transcript(student);
     // Native tab observers can reopen idle histories. Release every owned idle
     // runtime before loading a chat, rather than only the last selected one.
@@ -166,6 +158,7 @@ export async function startGateway(config) {
       }
     }
     activeConversations.set(student.id, agentId);
+    await recorders.get(student.id).select(agentId);
   }
   const modelCatalogs = new Map();
   async function modelsFor(student) {
@@ -564,6 +557,7 @@ export async function startGateway(config) {
           fingerprint,
         });
         saveConversations(student, createdAt);
+        await recorders.get(student.id).select(agent.id);
         return {
           type: "agent.create.response",
           payload: {
@@ -813,10 +807,21 @@ export async function startGateway(config) {
   async function exportStudent(student, outputBase = "/study/output/") {
     const saved = await transcript(student);
     const generatedImages = generatedImageRecords(config, student);
+    const listed = await clients
+      .get(student.id)
+      .fetchAgents({ filter: { includeArchived: true }, page: { limit: 200 } });
+    const savedIds = new Set(saved.conversations.map((item) => item.agentId));
     return {
       schemaVersion: 2,
       exportedAt: new Date().toISOString(),
       ...saved,
+      providerSessions: listed.entries
+        .filter(({ agent }) => savedIds.has(agent.id) && agent.persistence?.provider === "codex")
+        .map(({ agent }) => ({
+          agentId: agent.id,
+          provider: agent.persistence.provider,
+          sessionId: agent.persistence.sessionId,
+        })),
       entries: saved.entries.map((entry) => {
         if (entry.item?.type !== "assistant_message" || typeof entry.item.text !== "string")
           return entry;
@@ -865,6 +870,31 @@ export async function startGateway(config) {
     });
     createReadStream(file.path).pipe(response);
   }
+  async function exportAdmin(request, response) {
+    const archiveRequested =
+      new URL(request.url, "http://study.local").searchParams.get("format") === "archive";
+    if (archiveRequested && exportingArchive)
+      return reply(response, 409, { error: "A research export is already running" });
+    if (archiveRequested) exportingArchive = true;
+    try {
+      const data = {
+        schemaVersion: 2,
+        students: await Promise.all(
+          [...students.values()].map((student) => exportStudent(student, "/study/admin/output/")),
+        ),
+      };
+      if (archiveRequested)
+        return await sendResearchArchive(
+          response,
+          await createResearchArchive(config, [...students.values()], data),
+        );
+      return reply(response, 200, data, {
+        "Content-Disposition": "attachment; filename=lulu-study-results.json",
+      });
+    } finally {
+      if (archiveRequested) exportingArchive = false;
+    }
+  }
   async function adminRoute(pathname, request, response) {
     if (request.method !== "GET") return reply(response, 405, { error: "Method not allowed" });
     if (pathname === "/study/admin")
@@ -899,18 +929,7 @@ export async function startGateway(config) {
       return serveDocument(response, selected, pathname.slice("/study/admin/file/".length));
     if (pathname.startsWith("/study/admin/output/") && selected)
       return serveGeneratedImage(response, selected, pathname.slice("/study/admin/output/".length));
-    if (pathname === "/study/admin/export")
-      return reply(
-        response,
-        200,
-        {
-          schemaVersion: 2,
-          students: await Promise.all(
-            [...students.values()].map((student) => exportStudent(student, "/study/admin/output/")),
-          ),
-        },
-        { "Content-Disposition": "attachment; filename=lulu-study-results.json" },
-      );
+    if (pathname === "/study/admin/export") return exportAdmin(request, response);
     if (pathname !== "/study/admin/results") return reply(response, 404, { error: "Not found" });
     const summaries = await Promise.all(
       [...students.values()].map(async (student) => {
@@ -1078,6 +1097,7 @@ export async function startGateway(config) {
         await transcript(student).catch((error) =>
           console.error("Final transcript checkpoint failed:", error.message),
         );
+      for (const recorder of recorders.values()) await recorder.close();
       for (const client of clients.values()) await client.close();
       await new Promise((accept) => server.close(accept));
     },

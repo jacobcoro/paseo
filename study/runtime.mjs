@@ -229,6 +229,7 @@ try {
         agentId: agent.id,
         workspaceId: created.workspace.id,
         workspacePath: workspace,
+        providerRecordsDirs: mode === "live" ? [join(home, ".codex", "sessions")] : [],
       });
       writeFileSync(join(directory, `${id}.login.txt`), `${id}\n${password}\n`, { mode: 0o600 });
       console.log(`Prepared ${id}: ${agent.id} (${mode})`);
