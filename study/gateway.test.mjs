@@ -44,6 +44,9 @@ function call(path, cookie, body) {
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
 }
+function exportStudent(studentId) {
+  return call(`/study/admin/student?studentId=${encodeURIComponent(studentId)}`, adminCookie);
+}
 async function connect(cookie) {
   const client = new DaemonClient({
     url: base.replace("http:", "ws:") + "/ws",
@@ -88,6 +91,10 @@ try {
   const cookie1 = await signIn("s0101");
   const cookie2 = await signIn("s0102");
   const adminCookie = await signIn(config.admin.id);
+  await test("students cannot download transcript exports", async () => {
+    assert.equal((await call("/study/export", cookie1)).status, 404);
+    assert.equal((await exportStudent("s0101")).status, 200);
+  });
   const first = await connect(cookie1);
   const second = await connect(cookie2);
   const [one, two] = config.students;
@@ -116,8 +123,8 @@ try {
       first.waitForFinish(one.agentId, 15000),
       second.waitForFinish(two.agentId, 15000),
     ]);
-    const export1 = await (await call("/study/export", cookie1)).json();
-    const export2 = await (await call("/study/export", cookie2)).json();
+    const export1 = await (await exportStudent("s0101")).json();
+    const export2 = await (await exportStudent("s0102")).json();
     assert.ok(
       export1.entries.some(
         (entry) => entry.item.type === "user_message" && entry.item.text.includes("学生一"),
@@ -150,7 +157,7 @@ try {
       images: [{ data: image.toString("base64"), mimeType: "image/png" }],
     });
     await first.waitForFinish(one.agentId, 15000);
-    const exported = await (await call("/study/export", cookie1)).json();
+    const exported = await (await exportStudent("s0101")).json();
     assert.equal(exported.submittedImages.length, 1);
     const saved = exported.submittedImages[0];
     assert.equal(saved.clientMessageId, messageId);
@@ -207,7 +214,7 @@ try {
     );
     assert.equal((await call("/study/annotations", cookie1, { ...record, task: "" })).status, 400);
     assert.equal((await call("/study/annotations", cookie1, record)).status, 201);
-    const exported = await (await call("/study/export", cookie1)).json();
+    const exported = await (await exportStudent("s0101")).json();
     assert.equal(exported.annotations.length, 1);
     assert.equal(exported.annotations[0].studentId, "s0101");
     assert.equal(
@@ -227,7 +234,10 @@ try {
     gateway = await startGateway(config);
     base = `http://127.0.0.1:${gateway.port}`;
     const freshCookie = await signIn("s0101");
-    const exported = await (await call("/study/export", freshCookie)).json();
+    const freshAdminCookie = await signIn(config.admin.id);
+    const exported = await (
+      await call("/study/admin/student?studentId=s0101", freshAdminCookie)
+    ).json();
     assert.equal(exported.annotations.length, 1);
     assert.equal(exported.annotations[0].nextAction, record.nextAction);
     assert.ok(exported.entries.some((entry) => entry.item.type === "assistant_message"));

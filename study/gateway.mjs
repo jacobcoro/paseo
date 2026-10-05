@@ -792,17 +792,6 @@ export async function startGateway(config) {
         },
       },
     ],
-    [
-      "/study/export",
-      {
-        method: "GET",
-        run: async (request, response, { student }) => {
-          return reply(response, 200, await exportStudent(student), {
-            "Content-Disposition": `attachment; filename="${student.id}-research.json"`,
-          });
-        },
-      },
-    ],
   ]);
   async function exportStudent(student, outputBase = "/study/output/") {
     const saved = await transcript(student);
@@ -1006,6 +995,7 @@ export async function startGateway(config) {
         session.student,
         pathname.slice("/study/output/".length),
       );
+    if (pathname === "/study/export") return reply(response, 404, { error: "Not found" });
     const student = session.student;
     const route =
       researchRoutes.get(`${request.method} ${pathname}`) || researchRoutes.get(pathname);
