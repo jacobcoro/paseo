@@ -437,6 +437,24 @@ export async function startGateway(config) {
       ].includes(request.type)
     )
       return handleNativeSettings(student, request);
+    const wakeResponses = {
+      fetch_agent_timeline_request: "fetch_agent_timeline_response",
+      list_commands_request: "list_commands_response",
+      clear_agent_attention: "clear_agent_attention_response",
+      "agent.timeline.search.request": "agent.timeline.search.response",
+      "agent.timeline.list_prompts.request": "agent.timeline.list_prompts.response",
+    };
+    const responseType = wakeResponses[request.type];
+    if (responseType && typeof request.agentId === "string") {
+      return prepareConversation(student, request.agentId, async () => ({
+        type: responseType,
+        payload: await clients.get(student.id).sendCorrelatedSessionRequest({
+          requestId: request.requestId,
+          message: request,
+          responseType,
+        }),
+      }));
+    }
     if (request.type !== "agent.create.request") return null;
     return handleNativeCreation(student, request);
   }
@@ -498,63 +516,64 @@ export async function startGateway(config) {
         throw Error("Wait one minute before creating another chat");
       const quota = limits.prompt(student);
       if (quota) throw Error(quota);
-      await prepareConversation(student, "new");
-      const identity = createHash("sha256")
-        .update(student.id + ":" + options.idempotencyKey)
-        .digest("hex");
-      options.agentId ||= `${identity.slice(0, 8)}-${identity.slice(8, 12)}-4${identity.slice(13, 16)}-a${identity.slice(17, 20)}-${identity.slice(20, 32)}`;
-      const promptRequest = {
-        ...request,
-        agentId: options.agentId,
-        messageId: request.clientMessageId,
-      };
-      const images = await persistImages(promptRequest, student, config);
-      options.images = promptRequest.images;
-      appendFileSync(
-        join(config.recordsDir, `${student.id}.requests.jsonl`),
-        JSON.stringify({
-          receivedAt: new Date().toISOString(),
+      return await prepareConversation(student, "new", async () => {
+        const identity = createHash("sha256")
+          .update(student.id + ":" + options.idempotencyKey)
+          .digest("hex");
+        options.agentId ||= `${identity.slice(0, 8)}-${identity.slice(8, 12)}-4${identity.slice(13, 16)}-a${identity.slice(17, 20)}-${identity.slice(20, 32)}`;
+        const promptRequest = {
+          ...request,
           agentId: options.agentId,
-          message: {
-            type: "send_agent_message_request",
+          messageId: request.clientMessageId,
+        };
+        const images = await persistImages(promptRequest, student, config);
+        options.images = promptRequest.images;
+        appendFileSync(
+          join(config.recordsDir, `${student.id}.requests.jsonl`),
+          JSON.stringify({
+            receivedAt: new Date().toISOString(),
             agentId: options.agentId,
-            text: options.initialPrompt,
-            clientMessageId: options.clientMessageId,
-            images,
+            message: {
+              type: "send_agent_message_request",
+              agentId: options.agentId,
+              text: options.initialPrompt,
+              clientMessageId: options.clientMessageId,
+              images,
+            },
+            documents: documentRecords(config, student).map(
+              ({ id, name, mimeType, bytes, kind }) => ({ id, name, mimeType, bytes, kind }),
+            ),
+            settings: {
+              modelId: options.config.model,
+              thinkingOptionId: options.config.thinkingOptionId,
+            },
+          }) + "\n",
+          { mode: 0o600 },
+        );
+        // Native creation receipts preserve retry identity and create-and-prompt behavior.
+        const result = await clients.get(student.id).creations.createAgent(options);
+        if (!result.agent || result.error) throw Error(result.error || "Could not create chat");
+        const agent = result.agent;
+        activeConversations.set(student.id, agent.id);
+        const createdAt = new Date().toISOString();
+        conversationRecords.get(student.id).push({
+          agentId: agent.id,
+          title: agent.title || "新对话",
+          createdAt,
+          idempotencyKey: options.idempotencyKey,
+          fingerprint,
+        });
+        saveConversations(student, createdAt);
+        return {
+          type: "agent.create.response",
+          payload: {
+            requestId: request.requestId,
+            agent,
+            error: null,
+            ...(result.creation ? { creation: result.creation } : {}),
           },
-          documents: documentRecords(config, student).map(
-            ({ id, name, mimeType, bytes, kind }) => ({ id, name, mimeType, bytes, kind }),
-          ),
-          settings: {
-            modelId: options.config.model,
-            thinkingOptionId: options.config.thinkingOptionId,
-          },
-        }) + "\n",
-        { mode: 0o600 },
-      );
-      // Native creation receipts preserve retry identity and create-and-prompt behavior.
-      const result = await clients.get(student.id).creations.createAgent(options);
-      if (!result.agent || result.error) throw Error(result.error || "Could not create chat");
-      const agent = result.agent;
-      activeConversations.set(student.id, agent.id);
-      const createdAt = new Date().toISOString();
-      conversationRecords.get(student.id).push({
-        agentId: agent.id,
-        title: agent.title || "新对话",
-        createdAt,
-        idempotencyKey: options.idempotencyKey,
-        fingerprint,
+        };
       });
-      saveConversations(student, createdAt);
-      return {
-        type: "agent.create.response",
-        payload: {
-          requestId: request.requestId,
-          agent,
-          error: null,
-          ...(result.creation ? { creation: result.creation } : {}),
-        },
-      };
     } finally {
       conversationCreationLocks.delete(student.id);
     }
