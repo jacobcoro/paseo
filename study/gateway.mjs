@@ -20,6 +20,15 @@ import { imageRecords, imageFile } from "./images.mjs";
 import { createLimits } from "./limits.mjs";
 import { installProxy } from "./proxy.mjs";
 import { mergeTranscript } from "./transcript.mjs";
+import { releaseIdleRuntime } from "./runtime-control.mjs";
+import { studyAgentConfig } from "./chat-profile.mjs";
+import {
+  documentRecords,
+  documentFile,
+  persistDocumentUpload,
+  readStudentMemory,
+  writeStudentMemory,
+} from "./documents.mjs";
 import {
   archiveAssistantImages,
   generatedImageRecords,
@@ -35,11 +44,11 @@ function reply(response, status, body, headers = {}) {
   });
   response.end(typeof body === "string" ? body : JSON.stringify(body));
 }
-async function jsonBody(request) {
+async function jsonBody(request, maxBytes = 65536) {
   let body = "";
   for await (const chunk of request) {
     body += chunk;
-    if (Buffer.byteLength(body) > 65536) throw new Error("Request too large");
+    if (Buffer.byteLength(body) > maxBytes) throw new Error("Request too large");
   }
   return JSON.parse(body);
 }
@@ -58,9 +67,35 @@ export async function startGateway(config) {
   const limits = createLimits(config);
   const students = new Map(config.students.map((student) => [student.id, student]));
   const clients = new Map();
+  const conversationRecords = new Map();
+  const conversationCreatedAt = new Map();
+  const conversationCreationLocks = new Set();
   const socketPairs = new Set();
   mkdirSync(config.recordsDir, { recursive: true, mode: 0o700 });
   for (const student of config.students) {
+    const conversationPath = join(config.recordsDir, `${student.id}.conversations.json`);
+    const savedConversations = existsSync(conversationPath)
+      ? JSON.parse(readFileSync(conversationPath, "utf8"))
+      : { studentId: student.id, conversations: [], lastCreatedAt: null };
+    if (
+      savedConversations.studentId !== student.id ||
+      !Array.isArray(savedConversations.conversations)
+    )
+      throw new Error("Saved conversations belong to another student");
+    conversationRecords.set(student.id, savedConversations.conversations);
+    conversationCreatedAt.set(student.id, savedConversations.lastCreatedAt);
+    student.ownedConversationIds = savedConversations.conversations.map((item) => item.agentId);
+    const transcriptPath = join(config.recordsDir, `${student.id}.transcript.json`);
+    const savedTranscript = existsSync(transcriptPath)
+      ? JSON.parse(readFileSync(transcriptPath, "utf8"))
+      : null;
+    const currentIds = new Set([student.agentId, ...student.ownedConversationIds]);
+    student.preservedAgentIds = (savedTranscript?.conversations || [])
+      .map((item) => item.agentId)
+      .filter(
+        (agentId) =>
+          !currentIds.has(agentId) && !(student.historicalAgentIds || []).includes(agentId),
+      );
     const client = new DaemonClient({
       url: student.daemonUrl,
       password: student.daemonPassword,
@@ -86,6 +121,27 @@ export async function startGateway(config) {
         );
       }
     });
+  }
+  const activeConversations = new Map(
+    config.students.map((student) => [student.id, student.agentId]),
+  );
+  const preparationLocks = new Map();
+  function prepareConversation(student, agentId) {
+    const previous = preparationLocks.get(student.id) || Promise.resolve();
+    const current = previous
+      .catch(() => {})
+      .then(() => prepareConversationUnlocked(student, agentId));
+    preparationLocks.set(student.id, current);
+    return current;
+  }
+  async function prepareConversationUnlocked(student, agentId) {
+    const previous = activeConversations.get(student.id);
+    if (previous && previous !== agentId) {
+      await transcript(student);
+      if (!(await releaseIdleRuntime(student, previous)))
+        throw Error("Wait for the current reply before changing chats");
+    }
+    activeConversations.set(student.id, agentId);
   }
   function authenticate(request) {
     const token = /(?:^|;\s*)study_session=([^;]+)/.exec(request.headers.cookie || "")?.[1];
@@ -116,42 +172,98 @@ export async function startGateway(config) {
       return false;
     }
   }
-  async function transcript(student) {
+  const transcriptLocks = new Map();
+  function transcript(student) {
+    const previous = transcriptLocks.get(student.id) || Promise.resolve();
+    const current = previous.catch(() => {}).then(() => collectTranscript(student));
+    transcriptLocks.set(student.id, current);
+    return current;
+  }
+  async function collectTranscript(student) {
     const client = clients.get(student.id);
-    let page = await client.fetchAgentTimeline(student.agentId, {
-      projection: "canonical",
-      limit: 200,
-    });
-    const entries = [...page.entries];
-    const seen = new Set();
-    while (page.hasOlder && page.startCursor) {
-      const key = JSON.stringify(page.startCursor);
-      if (seen.has(key)) throw new Error("Transcript pagination stalled");
-      seen.add(key);
-      page = await client.fetchAgentTimeline(student.agentId, {
-        projection: "canonical",
-        limit: 200,
-        direction: "before",
-        cursor: page.startCursor,
-      });
-      entries.unshift(...page.entries);
-    }
     const destination = join(config.recordsDir, `${student.id}.transcript.json`);
     const saved = existsSync(destination) ? JSON.parse(readFileSync(destination, "utf8")) : null;
-    if (saved && (saved.studentId !== student.id || saved.agentId !== student.agentId))
+    if (saved && saved.studentId !== student.id)
       throw new Error("Saved transcript belongs to another student or agent");
+    const owned = [
+      { agentId: student.agentId, title: "水杯设计研究 / Cup design study", createdAt: null },
+      ...conversationRecords.get(student.id),
+    ];
+    const readonlyIds = [
+      ...new Set([...(student.historicalAgentIds || []), ...(student.preservedAgentIds || [])]),
+    ];
+    const readonly = readonlyIds.map((agentId) => ({
+      agentId,
+      title:
+        saved?.conversations?.find((item) => item.agentId === agentId)?.title ||
+        "Previous conversation",
+      createdAt: saved?.conversations?.find((item) => item.agentId === agentId)?.createdAt || null,
+      readonly: true,
+    }));
+    const previousGroups = Array.isArray(saved?.conversations) ? saved.conversations : [];
+    const listedAgentIds = new Set([...owned, ...readonly].map((item) => item.agentId));
+    const conversations = [];
+    for (const conversation of [
+      ...owned,
+      ...readonly,
+      ...previousGroups
+        .filter((item) => !listedAgentIds.has(item.agentId))
+        .map((item) => ({
+          agentId: item.agentId,
+          title: item.title || "Previous conversation",
+          createdAt: item.createdAt || null,
+          readonly: true,
+        })),
+    ]) {
+      const previous = previousGroups.find((group) => group.agentId === conversation.agentId);
+      if (conversation.agentId !== activeConversations.get(student.id)) {
+        conversations.push({ ...conversation, entries: previous?.entries || [] });
+        continue;
+      }
+      let page = await client.fetchAgentTimeline(conversation.agentId, {
+        projection: "canonical",
+        limit: 200,
+      });
+      const entries = [...page.entries];
+      const seen = new Set();
+      while (page.hasOlder && page.startCursor) {
+        const key = JSON.stringify(page.startCursor);
+        if (seen.has(key)) throw new Error("Transcript pagination stalled");
+        seen.add(key);
+        page = await client.fetchAgentTimeline(conversation.agentId, {
+          projection: "canonical",
+          limit: 200,
+          direction: "before",
+          cursor: page.startCursor,
+        });
+        entries.unshift(...page.entries);
+      }
+      conversations.push({
+        ...conversation,
+        entries: mergeTranscript(previous?.entries || [], entries).map((entry) =>
+          Object.assign({}, entry, { agentId: conversation.agentId }),
+        ),
+      });
+    }
+    const entries = mergeTranscript(
+      saved?.entries || [],
+      conversations.flatMap((conversation) => conversation.entries),
+    );
     const result = {
       studentId: student.id,
       agentId: student.agentId,
       model: config.model,
       mode: config.mode,
-      entries: mergeTranscript(saved?.entries || [], entries),
+      entries,
+      conversations,
     };
-    await archiveImages(student, result.entries).catch((error) =>
-      console.error("Generated image archive failed:", error.message),
-    );
-    writeFileSync(destination + ".tmp", JSON.stringify(result, null, 2), { mode: 0o600 });
-    renameSync(destination + ".tmp", destination);
+    await archiveImages(
+      student,
+      conversations.flatMap((conversation) => conversation.entries),
+    ).catch((error) => console.error("Generated image archive failed:", error.message));
+    const temporary = destination + `.${randomUUID()}.tmp`;
+    writeFileSync(temporary, JSON.stringify(result, null, 2), { mode: 0o600 });
+    renameSync(temporary, destination);
     return result;
   }
   function annotations(student) {
@@ -163,6 +275,19 @@ export async function startGateway(config) {
           .filter(Boolean)
           .map((line) => JSON.parse(line))
       : [];
+  }
+  function saveConversations(student, lastCreatedAt) {
+    const filename = join(config.recordsDir, `${student.id}.conversations.json`);
+    const saved = {
+      studentId: student.id,
+      conversations: conversationRecords.get(student.id),
+      lastCreatedAt,
+    };
+    const temporary = filename + `.${randomUUID()}.tmp`;
+    writeFileSync(temporary, JSON.stringify(saved, null, 2), { mode: 0o600 });
+    renameSync(temporary, filename);
+    conversationCreatedAt.set(student.id, lastCreatedAt);
+    student.ownedConversationIds = saved.conversations.map((item) => item.agentId);
   }
   async function handleLogin(request, response) {
     const input = await jsonBody(request);
@@ -225,6 +350,209 @@ export async function startGateway(config) {
       },
     ],
     [
+      "GET /study/conversations",
+      {
+        method: "GET",
+        run: async (_request, response, { student }) => {
+          const owned = [
+            {
+              agentId: student.agentId,
+              title: "水杯设计研究 / Cup design study",
+              createdAt: null,
+              readonly: false,
+            },
+            ...conversationRecords
+              .get(student.id)
+              .map((item) => Object.assign({}, item, { readonly: false })),
+          ];
+          const transcriptPath = join(config.recordsDir, `${student.id}.transcript.json`);
+          const saved = existsSync(transcriptPath)
+            ? JSON.parse(readFileSync(transcriptPath, "utf8"))
+            : null;
+          const history = [
+            ...new Set([
+              ...(student.historicalAgentIds || []),
+              ...(student.preservedAgentIds || []),
+            ]),
+          ]
+            .filter((agentId) => !owned.some((item) => item.agentId === agentId))
+            .map((agentId) => ({
+              agentId,
+              title:
+                saved?.conversations?.find((item) => item.agentId === agentId)?.title ||
+                "Previous conversation",
+              createdAt:
+                saved?.conversations?.find((item) => item.agentId === agentId)?.createdAt || null,
+              readonly: true,
+            }));
+          const preserved = (saved?.conversations || [])
+            .filter(
+              (item) =>
+                !owned.some((ownedItem) => ownedItem.agentId === item.agentId) &&
+                !history.some((historyItem) => historyItem.agentId === item.agentId),
+            )
+            .map((item) => ({
+              agentId: item.agentId,
+              title: item.title || "Previous conversation",
+              createdAt: item.createdAt || null,
+              readonly: true,
+            }));
+          return reply(response, 200, { conversations: [...owned, ...history, ...preserved] });
+        },
+      },
+    ],
+    [
+      "POST /study/conversations",
+      {
+        method: "POST",
+        run: async (request, response, { student }) => {
+          const input = await jsonBody(request);
+          if (conversationCreationLocks.has(student.id))
+            return reply(response, 429, { error: "A new chat is already being created" });
+          conversationCreationLocks.add(student.id);
+          try {
+            let title =
+              (typeof input.title === "string" ? input.title.trim() : "").slice(0, 80) ||
+              "New chat";
+            if (title === "New chat")
+              title = "新对话 / New chat " + (conversationRecords.get(student.id).length + 2);
+            if (conversationRecords.get(student.id).length >= 19)
+              return reply(response, 409, { error: "You have reached the 20 chat limit" });
+            const lastCreatedAt = conversationCreatedAt.get(student.id);
+            if (lastCreatedAt && Date.now() - Date.parse(lastCreatedAt) < 60000)
+              return reply(response, 429, {
+                error: "Wait one minute before creating another chat",
+              });
+            await prepareConversation(student, "new");
+            const agent = await clients.get(student.id).createAgent({
+              workspaceId: student.workspaceId,
+              config: { ...studyAgentConfig(), title },
+              labels: { "study.student": student.id, "study.conversation": "true" },
+            });
+            activeConversations.set(student.id, agent.id);
+            const createdAt = new Date().toISOString();
+            const conversation = { agentId: agent.id, title: agent.title || title, createdAt };
+            conversationRecords.get(student.id).push(conversation);
+            saveConversations(student, createdAt);
+            return reply(response, 201, { ...conversation, readonly: false });
+          } finally {
+            conversationCreationLocks.delete(student.id);
+          }
+        },
+      },
+    ],
+    [
+      "GET /study/latest",
+      {
+        method: "GET",
+        run: async (request, response, { student }) => {
+          const agentId = new URL(request.url, "http://study.local").searchParams.get("agentId");
+          const allowed = [
+            student.agentId,
+            ...(student.ownedConversationIds || []),
+            ...(student.historicalAgentIds || []),
+            ...(student.preservedAgentIds || []),
+          ];
+          if (!allowed.includes(agentId))
+            return reply(response, 404, { error: "Conversation not found" });
+          if ((student.preservedAgentIds || []).includes(agentId)) {
+            const transcriptPath = join(config.recordsDir, `${student.id}.transcript.json`);
+            const saved = existsSync(transcriptPath)
+              ? JSON.parse(readFileSync(transcriptPath, "utf8"))
+              : null;
+            const conversation = (saved?.conversations || []).find(
+              (item) => item.agentId === agentId,
+            );
+            const latest = conversation?.entries
+              .toReversed()
+              .find((entry) => entry.item.type === "assistant_message");
+            return reply(response, 200, {
+              text: latest?.item.text || "",
+              timestamp: latest?.timestamp || null,
+            });
+          }
+          await prepareConversation(student, agentId);
+          const page = await clients.get(student.id).fetchAgentTimeline(agentId, {
+            projection: "canonical",
+            limit: 20,
+          });
+          const latest = page.entries
+            .toReversed()
+            .find((entry) => entry.item.type === "assistant_message");
+          return reply(response, 200, {
+            text: latest?.item.text || "",
+            timestamp: latest?.timestamp || null,
+          });
+        },
+      },
+    ],
+    [
+      "GET /study/files",
+      {
+        method: "GET",
+        run: async (_request, response, { student }) =>
+          reply(response, 200, {
+            files: documentRecords(config, student).map(
+              ({ id, name, mimeType, bytes, kind, recordedAt }) => ({
+                id,
+                name,
+                mimeType,
+                bytes,
+                kind,
+                recordedAt,
+              }),
+            ),
+          }),
+      },
+    ],
+    [
+      "POST /study/files",
+      {
+        method: "POST",
+        run: async (request, response, { student }) => {
+          const input = await jsonBody(request, 12 * 1024 * 1024);
+          if (typeof input.name !== "string" || typeof input.data !== "string")
+            return reply(response, 400, { error: "Choose a supported document" });
+          const record = await persistDocumentUpload(config, student, {
+            name: input.name,
+            data: input.data,
+          });
+          return reply(response, 201, record);
+        },
+      },
+    ],
+    [
+      "GET /study/memory",
+      {
+        method: "GET",
+        run: async (_request, response, { student }) => {
+          return reply(response, 200, readStudentMemory(config, student));
+        },
+      },
+    ],
+    [
+      "POST /study/memory",
+      {
+        method: "POST",
+        run: async (request, response, { student }) => {
+          const input = await jsonBody(request, 12000);
+          if (typeof input.text !== "string" || Buffer.byteLength(input.text) > 8192)
+            return reply(response, 400, { error: "Memory must be 8 KiB or less" });
+          return reply(response, 200, writeStudentMemory(config, student, input.text));
+        },
+      },
+    ],
+    [
+      "DELETE /study/memory",
+      {
+        method: "DELETE",
+        run: async (_request, response, { student }) => {
+          writeStudentMemory(config, student, "");
+          return reply(response, 200, { ok: true });
+        },
+      },
+    ],
+    [
       "/study/records",
       {
         method: "GET",
@@ -234,6 +562,7 @@ export async function startGateway(config) {
             .filter((entry) => entry.item.type === "user_message")
             .map((entry) => ({
               id: entry.item.messageId || String(entry.seqStart),
+              agentId: entry.agentId,
               text: entry.item.text,
               timestamp: entry.timestamp,
             }));
@@ -250,15 +579,16 @@ export async function startGateway(config) {
           if (!parsed.success)
             return reply(response, 400, { error: "Complete the required research fields" });
           const saved = await transcript(student);
-          const ids = saved.entries
-            .filter((entry) => entry.item.type === "user_message")
-            .map((entry) => entry.item.messageId || String(entry.seqStart));
-          if (parsed.data.promptId !== "non-ai" && !ids.includes(parsed.data.promptId))
+          const promptEntries = saved.entries.filter((entry) => entry.item.type === "user_message");
+          const prompt = promptEntries.find(
+            (entry) => (entry.item.messageId || String(entry.seqStart)) === parsed.data.promptId,
+          );
+          if (parsed.data.promptId !== "non-ai" && !prompt)
             return reply(response, 403, { error: "Prompt does not belong to this student" });
           const record = {
             id: randomUUID(),
             studentId: student.id,
-            agentId: student.agentId,
+            agentId: prompt?.agentId || student.agentId,
             recordedAt: new Date().toISOString(),
             ...parsed.data,
           };
@@ -302,6 +632,8 @@ export async function startGateway(config) {
       annotations: annotations(student),
       submittedImages: imageRecords(config, student),
       generatedImages: generatedImageRecords(config, student),
+      submittedDocuments: documentRecords(config, student).filter((file) => file.kind === "upload"),
+      documentOutputs: documentRecords(config, student).filter((file) => file.kind === "output"),
     };
   }
   function serveImage(response, student, id) {
@@ -322,6 +654,19 @@ export async function startGateway(config) {
     });
     createReadStream(file.path).pipe(response);
   }
+  function serveDocument(response, student, id) {
+    const file = documentFile(config, student, id);
+    if (!file || !existsSync(file.path))
+      return reply(response, 404, { error: "Document not found" });
+    const encodedName = encodeURIComponent(file.name);
+    response.writeHead(200, {
+      "Content-Type": file.mimeType,
+      "Content-Disposition": `attachment; filename="document"; filename*=UTF-8''${encodedName}`,
+      "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
+    });
+    createReadStream(file.path).pipe(response);
+  }
   async function adminRoute(pathname, request, response) {
     if (request.method !== "GET") return reply(response, 405, { error: "Method not allowed" });
     if (pathname === "/study/admin")
@@ -337,6 +682,8 @@ export async function startGateway(config) {
         selected,
         new URL(request.url, "http://study.local").searchParams.get("id"),
       );
+    if (pathname.startsWith("/study/admin/file/") && selected)
+      return serveDocument(response, selected, pathname.slice("/study/admin/file/".length));
     if (pathname.startsWith("/study/admin/output/") && selected)
       return serveGeneratedImage(response, selected, pathname.slice("/study/admin/output/".length));
     if (pathname === "/study/admin/export")
@@ -355,7 +702,9 @@ export async function startGateway(config) {
     const summaries = await Promise.all(
       [...students.values()].map(async (student) => {
         const saved = await transcript(student);
-        const prompts = saved.entries.filter((entry) => entry.item.type === "user_message");
+        const allEntries = saved.entries;
+        const prompts = allEntries.filter((entry) => entry.item.type === "user_message");
+        const timestamps = allEntries.map((entry) => entry.timestamp).sort();
         const notes = annotations(student);
         const annotated = new Set(notes.map((record) => record.promptId));
         return {
@@ -363,10 +712,11 @@ export async function startGateway(config) {
           prompts: prompts.length,
           annotations: notes.length,
           images: imageRecords(config, student).length,
+          documents: documentRecords(config, student).length,
           missingAnnotations: prompts.filter(
             (entry) => !annotated.has(entry.item.messageId || String(entry.seqStart)),
           ).length,
-          lastEventAt: saved.entries.at(-1)?.timestamp || null,
+          lastEventAt: timestamps.at(-1) || null,
         };
       }),
     );
@@ -416,6 +766,8 @@ export async function startGateway(config) {
       return reply(response, 403, { error: "Use the researcher view" });
     if (pathname.startsWith("/study/image/"))
       return serveImage(response, session.student, pathname.slice("/study/image/".length));
+    if (pathname.startsWith("/study/file/"))
+      return serveDocument(response, session.student, pathname.slice("/study/file/".length));
     if (pathname.startsWith("/study/output/"))
       return serveGeneratedImage(
         response,
@@ -423,7 +775,8 @@ export async function startGateway(config) {
         pathname.slice("/study/output/".length),
       );
     const student = session.student;
-    const route = researchRoutes.get(pathname);
+    const route =
+      researchRoutes.get(`${request.method} ${pathname}`) || researchRoutes.get(pathname);
     if (route) {
       if (request.method !== route.method)
         return reply(response, 405, { error: "Method not allowed" });
@@ -470,6 +823,7 @@ export async function startGateway(config) {
     }
   });
   installProxy({
+    prepareConversation,
     server,
     config,
     authenticate,
@@ -505,7 +859,10 @@ export async function startGateway(config) {
         pair.browser.terminate();
         pair.upstream.terminate();
       }
-      for (const student of students.values()) await transcript(student);
+      for (const student of students.values())
+        await transcript(student).catch((error) =>
+          console.error("Final transcript checkpoint failed:", error.message),
+        );
       for (const client of clients.values()) await client.close();
       await new Promise((accept) => server.close(accept));
     },
