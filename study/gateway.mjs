@@ -1,11 +1,5 @@
 import { createServer } from "node:http";
-import {
-  randomBytes,
-  randomUUID,
-  scryptSync,
-  timingSafeEqual,
-  createHash,
-} from "node:crypto";
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual, createHash } from "node:crypto";
 import {
   appendFileSync,
   renameSync,
@@ -62,8 +56,7 @@ async function jsonBody(request, maxBytes = 65536) {
   let body = "";
   for await (const chunk of request) {
     body += chunk;
-    if (Buffer.byteLength(body) > maxBytes)
-      throw new Error("Request too large");
+    if (Buffer.byteLength(body) > maxBytes) throw new Error("Request too large");
   }
   return JSON.parse(body);
 }
@@ -80,9 +73,7 @@ function validPassword(password, student) {
 export async function startGateway(config) {
   const sessions = new Map();
   const limits = createLimits(config);
-  const students = new Map(
-    config.students.map((student) => [student.id, student])
-  );
+  const students = new Map(config.students.map((student) => [student.id, student]));
   const clients = new Map();
   const conversationRecords = new Map();
   const conversationCreatedAt = new Map();
@@ -90,10 +81,7 @@ export async function startGateway(config) {
   const socketPairs = new Set();
   mkdirSync(config.recordsDir, { recursive: true, mode: 0o700 });
   for (const student of config.students) {
-    const conversationPath = join(
-      config.recordsDir,
-      `${student.id}.conversations.json`
-    );
+    const conversationPath = join(config.recordsDir, `${student.id}.conversations.json`);
     const savedConversations = existsSync(conversationPath)
       ? JSON.parse(readFileSync(conversationPath, "utf8"))
       : { studentId: student.id, conversations: [], lastCreatedAt: null };
@@ -104,26 +92,17 @@ export async function startGateway(config) {
       throw new Error("Saved conversations belong to another student");
     conversationRecords.set(student.id, savedConversations.conversations);
     conversationCreatedAt.set(student.id, savedConversations.lastCreatedAt);
-    student.ownedConversationIds = savedConversations.conversations.map(
-      (item) => item.agentId
-    );
-    const transcriptPath = join(
-      config.recordsDir,
-      `${student.id}.transcript.json`
-    );
+    student.ownedConversationIds = savedConversations.conversations.map((item) => item.agentId);
+    const transcriptPath = join(config.recordsDir, `${student.id}.transcript.json`);
     const savedTranscript = existsSync(transcriptPath)
       ? JSON.parse(readFileSync(transcriptPath, "utf8"))
       : null;
-    const currentIds = new Set([
-      student.agentId,
-      ...student.ownedConversationIds,
-    ]);
+    const currentIds = new Set([student.agentId, ...student.ownedConversationIds]);
     student.preservedAgentIds = (savedTranscript?.conversations || [])
       .map((item) => item.agentId)
       .filter(
         (agentId) =>
-          !currentIds.has(agentId) &&
-          !(student.historicalAgentIds || []).includes(agentId)
+          !currentIds.has(agentId) && !(student.historicalAgentIds || []).includes(agentId),
       );
     const client = new DaemonClient({
       url: student.daemonUrl,
@@ -144,18 +123,15 @@ export async function startGateway(config) {
       ) {
         appendFileSync(
           join(config.recordsDir, `${student.id}.events.jsonl`),
-          JSON.stringify({
-            recordedAt: new Date().toISOString(),
-            studentId: student.id,
-            message,
-          }) + "\n",
-          { mode: 0o600 }
+          JSON.stringify({ recordedAt: new Date().toISOString(), studentId: student.id, message }) +
+            "\n",
+          { mode: 0o600 },
         );
       }
     });
   }
   const activeConversations = new Map(
-    config.students.map((student) => [student.id, student.agentId])
+    config.students.map((student) => [student.id, student.agentId]),
   );
   const preparationLocks = new Map();
   function prepareConversation(student, agentId, operation = () => {}) {
@@ -195,9 +171,7 @@ export async function startGateway(config) {
     if (!catalog || catalog.expires < Date.now()) {
       catalog = {
         expires: Date.now() + 300000,
-        promise: clients
-          .get(student.id)
-          .listProviderModels("codex", { cwd: "/workspace" }),
+        promise: clients.get(student.id).listProviderModels("codex", { cwd: "/workspace" }),
       };
       modelCatalogs.set(student.id, catalog);
     }
@@ -222,17 +196,11 @@ export async function startGateway(config) {
   function settingChanges(student) {
     const path = join(config.recordsDir, `${student.id}.settings.jsonl`);
     return existsSync(path)
-      ? readFileSync(path, "utf8")
-          .trim()
-          .split("\n")
-          .filter(Boolean)
-          .map(JSON.parse)
+      ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse)
       : [];
   }
   function authenticate(request) {
-    const token = /(?:^|;\s*)study_session=([^;]+)/.exec(
-      request.headers.cookie || ""
-    )?.[1];
+    const token = /(?:^|;\s*)study_session=([^;]+)/.exec(request.headers.cookie || "")?.[1];
     const session = sessions.get(token);
     if (!session || session.expires < Date.now()) return null;
     return { ...session, token, student: students.get(session.studentId) };
@@ -247,11 +215,9 @@ export async function startGateway(config) {
           .get(student.id)
           .readFile(
             path.startsWith("/workspace/") ? "/workspace" : "/",
-            path.startsWith("/workspace/")
-              ? path.slice("/workspace".length)
-              : path,
+            path.startsWith("/workspace/") ? path.slice("/workspace".length) : path,
             `study-output-${randomUUID()}`,
-            maxBytes
+            maxBytes,
           ),
     });
   function checkOrigin(request) {
@@ -265,9 +231,7 @@ export async function startGateway(config) {
   const transcriptLocks = new Map();
   function transcript(student) {
     const previous = transcriptLocks.get(student.id) || Promise.resolve();
-    const current = previous
-      .catch(() => {})
-      .then(() => collectTranscript(student));
+    const current = previous.catch(() => {}).then(() => collectTranscript(student));
     transcriptLocks.set(student.id, current);
     return current;
   }
@@ -281,45 +245,27 @@ export async function startGateway(config) {
   }
   async function collectTranscript(student) {
     const client = clients.get(student.id);
-    const destination = join(
-      config.recordsDir,
-      `${student.id}.transcript.json`
-    );
-    const saved = existsSync(destination)
-      ? JSON.parse(readFileSync(destination, "utf8"))
-      : null;
+    const destination = join(config.recordsDir, `${student.id}.transcript.json`);
+    const saved = existsSync(destination) ? JSON.parse(readFileSync(destination, "utf8")) : null;
     if (saved && saved.studentId !== student.id)
       throw new Error("Saved transcript belongs to another student or agent");
     const owned = [
-      {
-        agentId: student.agentId,
-        title: "设计对话 / Design chat",
-        createdAt: null,
-      },
+      { agentId: student.agentId, title: "设计对话 / Design chat", createdAt: null },
       ...conversationRecords.get(student.id),
     ];
     const readonlyIds = [
-      ...new Set([
-        ...(student.historicalAgentIds || []),
-        ...(student.preservedAgentIds || []),
-      ]),
+      ...new Set([...(student.historicalAgentIds || []), ...(student.preservedAgentIds || [])]),
     ];
     const readonly = readonlyIds.map((agentId) => ({
       agentId,
       title:
         saved?.conversations?.find((item) => item.agentId === agentId)?.title ||
         "Previous conversation",
-      createdAt:
-        saved?.conversations?.find((item) => item.agentId === agentId)
-          ?.createdAt || null,
+      createdAt: saved?.conversations?.find((item) => item.agentId === agentId)?.createdAt || null,
       readonly: true,
     }));
-    const previousGroups = Array.isArray(saved?.conversations)
-      ? saved.conversations
-      : [];
-    const listedAgentIds = new Set(
-      [...owned, ...readonly].map((item) => item.agentId)
-    );
+    const previousGroups = Array.isArray(saved?.conversations) ? saved.conversations : [];
+    const listedAgentIds = new Set([...owned, ...readonly].map((item) => item.agentId));
     const conversations = [];
     for (const conversation of [
       ...owned,
@@ -333,9 +279,7 @@ export async function startGateway(config) {
           readonly: true,
         })),
     ]) {
-      const previous = previousGroups.find(
-        (group) => group.agentId === conversation.agentId
-      );
+      const previous = previousGroups.find((group) => group.agentId === conversation.agentId);
       if (conversation.agentId !== activeConversations.get(student.id)) {
         conversations.push({
           ...previous,
@@ -370,14 +314,14 @@ export async function startGateway(config) {
       conversations.push({
         ...conversation,
         settings: await settingsFor(student, conversation.agentId),
-        entries: mergeTranscript(previous?.entries || [], entries).map(
-          (entry) => Object.assign({}, entry, { agentId: conversation.agentId })
+        entries: mergeTranscript(previous?.entries || [], entries).map((entry) =>
+          Object.assign({}, entry, { agentId: conversation.agentId }),
         ),
       });
     }
     const entries = mergeTranscript(
       saved?.entries || [],
-      conversations.flatMap((conversation) => conversation.entries)
+      conversations.flatMap((conversation) => conversation.entries),
     );
     const result = {
       studentId: student.id,
@@ -389,10 +333,8 @@ export async function startGateway(config) {
     };
     await archiveImages(
       student,
-      conversations.flatMap((conversation) => conversation.entries)
-    ).catch((error) =>
-      console.error("Generated image archive failed:", error.message)
-    );
+      conversations.flatMap((conversation) => conversation.entries),
+    ).catch((error) => console.error("Generated image archive failed:", error.message));
     const temporary = destination + `.${randomUUID()}.tmp`;
     writeFileSync(temporary, JSON.stringify(result, null, 2), { mode: 0o600 });
     renameSync(temporary, destination);
@@ -409,10 +351,7 @@ export async function startGateway(config) {
       : [];
   }
   function saveConversations(student, lastCreatedAt) {
-    const filename = join(
-      config.recordsDir,
-      `${student.id}.conversations.json`
-    );
+    const filename = join(config.recordsDir, `${student.id}.conversations.json`);
     const saved = {
       studentId: student.id,
       conversations: conversationRecords.get(student.id),
@@ -422,22 +361,14 @@ export async function startGateway(config) {
     writeFileSync(temporary, JSON.stringify(saved, null, 2), { mode: 0o600 });
     renameSync(temporary, filename);
     conversationCreatedAt.set(student.id, lastCreatedAt);
-    student.ownedConversationIds = saved.conversations.map(
-      (item) => item.agentId
-    );
+    student.ownedConversationIds = saved.conversations.map((item) => item.agentId);
   }
   async function applySettings(student, input) {
     const parsed = ModelSettingsInput.parse(input);
-    if (
-      ![student.agentId, ...student.ownedConversationIds].includes(
-        parsed.agentId
-      )
-    )
+    if (![student.agentId, ...student.ownedConversationIds].includes(parsed.agentId))
       throw Error("Conversation not found");
     if (!validModelSettings(parsed, await modelsFor(student)))
-      throw Error(
-        "This model or reasoning level is unavailable. Astra is blocked."
-      );
+      throw Error("This model or reasoning level is unavailable. Astra is blocked.");
     if (!limits.allow("settings:" + student.id, 20))
       throw Error("Wait a minute before changing settings again");
     return prepareConversation(student, input.agentId, async () => {
@@ -463,7 +394,7 @@ export async function startGateway(config) {
         appendFileSync(
           join(config.recordsDir, `${student.id}.settings.jsonl`),
           JSON.stringify(audit) + "\n",
-          { mode: 0o600 }
+          { mode: 0o600 },
         );
       }
       return audit.after;
@@ -486,19 +417,14 @@ export async function startGateway(config) {
     }
     if (request.type === "agent.timeline.set_subscription.request")
       request.agentIds = request.agentIds?.filter((id) => !readonly.has(id));
-    if (
-      request.type === "fetch_agent_timeline_request" &&
-      readonly.has(request.agentId)
-    ) {
+    if (request.type === "fetch_agent_timeline_request" && readonly.has(request.agentId)) {
       const path = join(config.recordsDir, `${student.id}.transcript.json`);
       const saved = JSON.parse(readFileSync(path, "utf8"));
-      const group = saved.conversations?.find(
-        (item) => item.agentId === request.agentId
-      );
+      const group = saved.conversations?.find((item) => item.agentId === request.agentId);
       return savedTimeline(
         request,
         group?.entries || [],
-        await metadataFor(student, request.agentId)
+        await metadataFor(student, request.agentId),
       );
     }
     if (
@@ -516,11 +442,7 @@ export async function startGateway(config) {
     const current = await settingsFor(student, request.agentId);
     let update;
     if (request.type === "agent.config.apply.request") {
-      if (
-        Object.keys(request.config).some(
-          (key) => !["modelId", "thinkingOptionId"].includes(key)
-        )
-      )
+      if (Object.keys(request.config).some((key) => !["modelId", "thinkingOptionId"].includes(key)))
         throw Error("Only model and reasoning can be changed");
       update = request.config;
     } else
@@ -529,21 +451,13 @@ export async function startGateway(config) {
           ? { modelId: request.modelId }
           : { thinkingOptionId: request.thinkingOptionId };
     const modelId = update.modelId || current.modelId;
-    const model = studentModels(await modelsFor(student)).find(
-      (item) => item.id === modelId
-    );
+    const model = studentModels(await modelsFor(student)).find((item) => item.id === modelId);
     const thinkingOptionId =
       update.thinkingOptionId ||
-      (model?.thinkingOptions.some(
-        (item) => item.id === current.thinkingOptionId
-      )
+      (model?.thinkingOptions.some((item) => item.id === current.thinkingOptionId)
         ? current.thinkingOptionId
         : model?.defaultThinkingOptionId);
-    await applySettings(student, {
-      agentId: request.agentId,
-      modelId,
-      thinkingOptionId,
-    });
+    await applySettings(student, { agentId: request.agentId, modelId, thinkingOptionId });
     return {
       type: request.type.replace("request", "response"),
       payload: {
@@ -556,9 +470,7 @@ export async function startGateway(config) {
   }
   async function handleNativeCreation(student, request) {
     const options = nativeCreation(request, student, await modelsFor(student));
-    const fingerprint = createHash("sha256")
-      .update(JSON.stringify(options))
-      .digest("hex");
+    const fingerprint = createHash("sha256").update(JSON.stringify(options)).digest("hex");
     const prior = conversationRecords
       .get(student.id)
       .find((item) => item.idempotencyKey === options.idempotencyKey);
@@ -588,13 +500,7 @@ export async function startGateway(config) {
       const identity = createHash("sha256")
         .update(student.id + ":" + options.idempotencyKey)
         .digest("hex");
-      options.agentId ||= `${identity.slice(0, 8)}-${identity.slice(
-        8,
-        12
-      )}-4${identity.slice(13, 16)}-a${identity.slice(17, 20)}-${identity.slice(
-        20,
-        32
-      )}`;
+      options.agentId ||= `${identity.slice(0, 8)}-${identity.slice(8, 12)}-4${identity.slice(13, 16)}-a${identity.slice(17, 20)}-${identity.slice(20, 32)}`;
       const promptRequest = {
         ...request,
         agentId: options.agentId,
@@ -615,27 +521,18 @@ export async function startGateway(config) {
             images,
           },
           documents: documentRecords(config, student).map(
-            ({ id, name, mimeType, bytes, kind }) => ({
-              id,
-              name,
-              mimeType,
-              bytes,
-              kind,
-            })
+            ({ id, name, mimeType, bytes, kind }) => ({ id, name, mimeType, bytes, kind }),
           ),
           settings: {
             modelId: options.config.model,
             thinkingOptionId: options.config.thinkingOptionId,
           },
         }) + "\n",
-        { mode: 0o600 }
+        { mode: 0o600 },
       );
       // Native creation receipts preserve retry identity and create-and-prompt behavior.
-      const result = await clients
-        .get(student.id)
-        .creations.createAgent(options);
-      if (!result.agent || result.error)
-        throw Error(result.error || "Could not create chat");
+      const result = await clients.get(student.id).creations.createAgent(options);
+      if (!result.agent || result.error) throw Error(result.error || "Could not create chat");
       const agent = result.agent;
       activeConversations.set(student.id, agent.id);
       const createdAt = new Date().toISOString();
@@ -662,13 +559,8 @@ export async function startGateway(config) {
   }
   async function handleLogin(request, response) {
     const input = await jsonBody(request);
-    if (
-      !limits.allow("login-total", 120) ||
-      !limits.allow("login:" + input.studentId, 10)
-    )
-      return reply(response, 429, {
-        error: "Wait a minute before trying again",
-      });
+    if (!limits.allow("login-total", 120) || !limits.allow("login:" + input.studentId, 10))
+      return reply(response, 429, { error: "Wait a minute before trying again" });
     const student = students.get(input.studentId);
     const admin = config.admin?.id === input.studentId ? config.admin : null;
     const account = student || admin;
@@ -680,15 +572,14 @@ export async function startGateway(config) {
       role: admin ? "admin" : "student",
       expires: Date.now() + 6 * 3600000,
     });
-    const secure =
-      request.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
+    const secure = request.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
     return reply(
       response,
       200,
       { studentId: account.id, role: admin ? "admin" : "student" },
       {
         "Set-Cookie": `study_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=21600${secure}`,
-      }
+      },
     );
   }
   const researchRoutes = new Map([
@@ -707,10 +598,7 @@ export async function startGateway(config) {
             response,
             200,
             { ok: true },
-            {
-              "Set-Cookie":
-                "study_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
-            }
+            { "Set-Cookie": "study_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" },
           );
         },
       },
@@ -734,10 +622,7 @@ export async function startGateway(config) {
       {
         method: "GET",
         run: async (request, response, { student }) => {
-          const agentId = new URL(
-            request.url,
-            "http://study.local"
-          ).searchParams.get("agentId");
+          const agentId = new URL(request.url, "http://study.local").searchParams.get("agentId");
           const allowed = [
             student.agentId,
             ...(student.ownedConversationIds || []),
@@ -747,15 +632,12 @@ export async function startGateway(config) {
           if (!allowed.includes(agentId))
             return reply(response, 404, { error: "Conversation not found" });
           if ((student.preservedAgentIds || []).includes(agentId)) {
-            const transcriptPath = join(
-              config.recordsDir,
-              `${student.id}.transcript.json`
-            );
+            const transcriptPath = join(config.recordsDir, `${student.id}.transcript.json`);
             const saved = existsSync(transcriptPath)
               ? JSON.parse(readFileSync(transcriptPath, "utf8"))
               : null;
             const conversation = (saved?.conversations || []).find(
-              (item) => item.agentId === agentId
+              (item) => item.agentId === agentId,
             );
             const latest = conversation?.entries
               .toReversed()
@@ -766,12 +648,10 @@ export async function startGateway(config) {
             });
           }
           await prepareConversation(student, agentId);
-          const page = await clients
-            .get(student.id)
-            .fetchAgentTimeline(agentId, {
-              projection: "canonical",
-              limit: 20,
-            });
+          const page = await clients.get(student.id).fetchAgentTimeline(agentId, {
+            projection: "canonical",
+            limit: 20,
+          });
           const latest = page.entries
             .toReversed()
             .find((entry) => entry.item.type === "assistant_message");
@@ -796,7 +676,7 @@ export async function startGateway(config) {
                 bytes,
                 kind,
                 recordedAt,
-              })
+              }),
             ),
           }),
       },
@@ -808,9 +688,7 @@ export async function startGateway(config) {
         run: async (request, response, { student }) => {
           const input = await jsonBody(request, 12 * 1024 * 1024);
           if (typeof input.name !== "string" || typeof input.data !== "string")
-            return reply(response, 400, {
-              error: "Choose a supported document",
-            });
+            return reply(response, 400, { error: "Choose a supported document" });
           const record = await persistDocumentUpload(config, student, {
             name: input.name,
             data: input.data,
@@ -834,18 +712,9 @@ export async function startGateway(config) {
         method: "POST",
         run: async (request, response, { student }) => {
           const input = await jsonBody(request, 12000);
-          if (
-            typeof input.text !== "string" ||
-            Buffer.byteLength(input.text) > 8192
-          )
-            return reply(response, 400, {
-              error: "Memory must be 8 KiB or less",
-            });
-          return reply(
-            response,
-            200,
-            writeStudentMemory(config, student, input.text)
-          );
+          if (typeof input.text !== "string" || Buffer.byteLength(input.text) > 8192)
+            return reply(response, 400, { error: "Memory must be 8 KiB or less" });
+          return reply(response, 200, writeStudentMemory(config, student, input.text));
         },
       },
     ],
@@ -873,10 +742,7 @@ export async function startGateway(config) {
               text: entry.item.text,
               timestamp: entry.timestamp,
             }));
-          return reply(response, 200, {
-            prompts,
-            annotations: annotations(student),
-          });
+          return reply(response, 200, { prompts, annotations: annotations(student) });
         },
       },
     ],
@@ -887,22 +753,14 @@ export async function startGateway(config) {
         run: async (request, response, { student }) => {
           const parsed = Annotation.safeParse(await jsonBody(request));
           if (!parsed.success)
-            return reply(response, 400, {
-              error: "Complete the required research fields",
-            });
+            return reply(response, 400, { error: "Complete the required research fields" });
           const saved = await transcript(student);
-          const promptEntries = saved.entries.filter(
-            (entry) => entry.item.type === "user_message"
-          );
+          const promptEntries = saved.entries.filter((entry) => entry.item.type === "user_message");
           const prompt = promptEntries.find(
-            (entry) =>
-              (entry.item.messageId || String(entry.seqStart)) ===
-              parsed.data.promptId
+            (entry) => (entry.item.messageId || String(entry.seqStart)) === parsed.data.promptId,
           );
           if (parsed.data.promptId !== "non-ai" && !prompt)
-            return reply(response, 403, {
-              error: "Prompt does not belong to this student",
-            });
+            return reply(response, 403, { error: "Prompt does not belong to this student" });
           const record = {
             id: randomUUID(),
             studentId: student.id,
@@ -913,7 +771,7 @@ export async function startGateway(config) {
           appendFileSync(
             join(config.recordsDir, `${student.id}.annotations.jsonl`),
             JSON.stringify(record) + "\n",
-            { mode: 0o600 }
+            { mode: 0o600 },
           );
           return reply(response, 201, record);
         },
@@ -939,18 +797,11 @@ export async function startGateway(config) {
       exportedAt: new Date().toISOString(),
       ...saved,
       entries: saved.entries.map((entry) => {
-        if (
-          entry.item?.type !== "assistant_message" ||
-          typeof entry.item.text !== "string"
-        )
+        if (entry.item?.type !== "assistant_message" || typeof entry.item.text !== "string")
           return entry;
         return Object.assign({}, entry, {
           item: Object.assign({}, entry.item, {
-            text: rewriteGeneratedImageMarkdown(
-              entry.item.text,
-              generatedImages,
-              outputBase
-            ),
+            text: rewriteGeneratedImageMarkdown(entry.item.text, generatedImages, outputBase),
           }),
         });
       }),
@@ -958,12 +809,8 @@ export async function startGateway(config) {
       settingChanges: settingChanges(student),
       submittedImages: imageRecords(config, student),
       generatedImages: generatedImageRecords(config, student),
-      submittedDocuments: documentRecords(config, student).filter(
-        (file) => file.kind === "upload"
-      ),
-      documentOutputs: documentRecords(config, student).filter(
-        (file) => file.kind === "output"
-      ),
+      submittedDocuments: documentRecords(config, student).filter((file) => file.kind === "upload"),
+      documentOutputs: documentRecords(config, student).filter((file) => file.kind === "output"),
     };
   }
   function serveImage(response, student, id) {
@@ -977,8 +824,7 @@ export async function startGateway(config) {
   }
   function serveGeneratedImage(response, student, id) {
     const file = generatedImageFile(config, student, id);
-    if (!file || !existsSync(file.path))
-      return reply(response, 404, { error: "Image not found" });
+    if (!file || !existsSync(file.path)) return reply(response, 404, { error: "Image not found" });
     response.writeHead(200, {
       "Content-Type": file.mimeType,
       "Cache-Control": "private, no-store",
@@ -999,60 +845,39 @@ export async function startGateway(config) {
     createReadStream(file.path).pipe(response);
   }
   async function adminRoute(pathname, request, response) {
-    if (request.method !== "GET")
-      return reply(response, 405, { error: "Method not allowed" });
+    if (request.method !== "GET") return reply(response, 405, { error: "Method not allowed" });
     if (pathname === "/study/admin")
-      return reply(response, 200, adminHtml, {
-        "Content-Type": "text/html; charset=utf-8",
-      });
+      return reply(response, 200, adminHtml, { "Content-Type": "text/html; charset=utf-8" });
     if (pathname === "/study/admin/session") {
-      const agentId = new URL(
-        request.url,
-        "http://study.local"
-      ).searchParams.get("agentId");
+      const agentId = new URL(request.url, "http://study.local").searchParams.get("agentId");
       const owner = [...students.values()].find((student) =>
         [
           student.agentId,
           ...student.ownedConversationIds,
           ...(student.historicalAgentIds || []),
           ...(student.preservedAgentIds || []),
-        ].includes(agentId)
+        ].includes(agentId),
       );
       if (!owner) return reply(response, 404, { error: "Session not found" });
-      const data = researchSession(
-        await exportStudent(owner, "/study/admin/output/"),
-        agentId
-      );
+      const data = researchSession(await exportStudent(owner, "/study/admin/output/"), agentId);
       if (!data) return reply(response, 404, { error: "Session not found" });
       return reply(response, 200, data);
     }
     const selected = students.get(
-      new URL(request.url, "http://study.local").searchParams.get("studentId")
+      new URL(request.url, "http://study.local").searchParams.get("studentId"),
     );
     if (pathname === "/study/admin/student" && selected)
-      return reply(
-        response,
-        200,
-        await exportStudent(selected, "/study/admin/output/")
-      );
+      return reply(response, 200, await exportStudent(selected, "/study/admin/output/"));
     if (pathname === "/study/admin/image" && selected)
       return serveImage(
         response,
         selected,
-        new URL(request.url, "http://study.local").searchParams.get("id")
+        new URL(request.url, "http://study.local").searchParams.get("id"),
       );
     if (pathname.startsWith("/study/admin/file/") && selected)
-      return serveDocument(
-        response,
-        selected,
-        pathname.slice("/study/admin/file/".length)
-      );
+      return serveDocument(response, selected, pathname.slice("/study/admin/file/".length));
     if (pathname.startsWith("/study/admin/output/") && selected)
-      return serveGeneratedImage(
-        response,
-        selected,
-        pathname.slice("/study/admin/output/".length)
-      );
+      return serveGeneratedImage(response, selected, pathname.slice("/study/admin/output/".length));
     if (pathname === "/study/admin/export")
       return reply(
         response,
@@ -1060,24 +885,17 @@ export async function startGateway(config) {
         {
           schemaVersion: 2,
           students: await Promise.all(
-            [...students.values()].map((student) =>
-              exportStudent(student, "/study/admin/output/")
-            )
+            [...students.values()].map((student) => exportStudent(student, "/study/admin/output/")),
           ),
         },
-        {
-          "Content-Disposition": "attachment; filename=lulu-study-results.json",
-        }
+        { "Content-Disposition": "attachment; filename=lulu-study-results.json" },
       );
-    if (pathname !== "/study/admin/results")
-      return reply(response, 404, { error: "Not found" });
+    if (pathname !== "/study/admin/results") return reply(response, 404, { error: "Not found" });
     const summaries = await Promise.all(
       [...students.values()].map(async (student) => {
         const saved = await transcript(student);
         const allEntries = saved.entries;
-        const prompts = allEntries.filter(
-          (entry) => entry.item.type === "user_message"
-        );
+        const prompts = allEntries.filter((entry) => entry.item.type === "user_message");
         const timestamps = allEntries.map((entry) => entry.timestamp).sort();
         const notes = annotations(student);
         const annotated = new Set(notes.map((record) => record.promptId));
@@ -1088,29 +906,21 @@ export async function startGateway(config) {
           images: imageRecords(config, student).length,
           documents: documentRecords(config, student).length,
           missingAnnotations: prompts.filter(
-            (entry) =>
-              !annotated.has(entry.item.messageId || String(entry.seqStart))
+            (entry) => !annotated.has(entry.item.messageId || String(entry.seqStart)),
           ).length,
           lastEventAt: timestamps.at(-1) || null,
         };
-      })
+      }),
     );
     return reply(response, 200, { mode: config.mode, students: summaries });
   }
   function serveAsset(pathname, response, student) {
-    const requested = resolve(
-      config.webDir,
-      "." + decodeURIComponent(pathname)
-    );
-    if (
-      !requested.startsWith(resolve(config.webDir) + "/") &&
-      requested !== resolve(config.webDir)
-    )
+    const requested = resolve(config.webDir, "." + decodeURIComponent(pathname));
+    if (!requested.startsWith(resolve(config.webDir) + "/") && requested !== resolve(config.webDir))
       return reply(response, 403, { error: "Invalid path" });
     let filename = requested;
     if (!existsSync(filename) || !statSync(filename).isFile()) {
-      if (extname(pathname))
-        return reply(response, 404, { error: "Not found" });
+      if (extname(pathname)) return reply(response, 404, { error: "Not found" });
       filename = join(config.webDir, "index.html");
     }
     const types = {
@@ -1133,12 +943,7 @@ export async function startGateway(config) {
         '<script>window.__PASEO_INITIAL_DAEMON_CONNECTION__={listen:window.location.hostname+":"+(window.location.port||(window.location.protocol==="https:"?"443":"80")),useTls:window.location.protocol==="https:"};if(["/","/welcome","/open-project","/new","/history","/settings"].includes(window.location.pathname))window.history.replaceState(null,"",' +
         JSON.stringify(initialRoute) +
         ")</script>";
-      response.end(
-        readFileSync(filename, "utf8").replace(
-          /<\/head>/i,
-          bootstrap + "</head>"
-        )
-      );
+      response.end(readFileSync(filename, "utf8").replace(/<\/head>/i, bootstrap + "</head>"));
       return;
     }
     createReadStream(filename).pipe(response);
@@ -1152,51 +957,32 @@ export async function startGateway(config) {
     if (session.role === "admin" && pathname !== "/study/logout")
       return reply(response, 403, { error: "Use the researcher view" });
     if (pathname.startsWith("/study/image/"))
-      return serveImage(
-        response,
-        session.student,
-        pathname.slice("/study/image/".length)
-      );
+      return serveImage(response, session.student, pathname.slice("/study/image/".length));
     if (pathname.startsWith("/study/file/"))
-      return serveDocument(
-        response,
-        session.student,
-        pathname.slice("/study/file/".length)
-      );
+      return serveDocument(response, session.student, pathname.slice("/study/file/".length));
     if (pathname.startsWith("/study/output/"))
       return serveGeneratedImage(
         response,
         session.student,
-        pathname.slice("/study/output/".length)
+        pathname.slice("/study/output/".length),
       );
     const student = session.student;
     const route =
-      researchRoutes.get(`${request.method} ${pathname}`) ||
-      researchRoutes.get(pathname);
+      researchRoutes.get(`${request.method} ${pathname}`) || researchRoutes.get(pathname);
     if (route) {
       if (request.method !== route.method)
         return reply(response, 405, { error: "Method not allowed" });
       return await route.run(request, response, session);
     }
     if (pathname === "/api/health" && request.method === "GET") {
-      const origin = student.daemonUrl
-        .replace("ws://", "http://")
-        .replace(/\/ws$/, "");
+      const origin = student.daemonUrl.replace("ws://", "http://").replace(/\/ws$/, "");
       const upstream = await fetch(origin + "/api/health");
       return reply(response, upstream.status, await upstream.text());
     }
-    if (
-      pathname.startsWith("/api/") ||
-      pathname.startsWith("/mcp") ||
-      pathname.startsWith("/.")
-    )
-      return reply(response, 403, {
-        error: "Unavailable in the student study",
-      });
-    if (request.method !== "GET")
-      return reply(response, 405, { error: "Method not allowed" });
-    if (pathname.endsWith(".map"))
-      return reply(response, 404, { error: "Not found" });
+    if (pathname.startsWith("/api/") || pathname.startsWith("/mcp") || pathname.startsWith("/."))
+      return reply(response, 403, { error: "Unavailable in the student study" });
+    if (request.method !== "GET") return reply(response, 405, { error: "Method not allowed" });
+    if (pathname.endsWith(".map")) return reply(response, 404, { error: "Not found" });
     return serveAsset(pathname, response, student);
   }
   const server = createServer(async (request, response) => {
@@ -1205,14 +991,10 @@ export async function startGateway(config) {
     try {
       const pathname = new URL(request.url, "http://study.local").pathname;
       const publicData = new Map([
-        [
-          "/manifest.json",
-          { name: "Lulu design study", start_url: "/", display: "standalone" },
-        ],
+        ["/manifest.json", { name: "Lulu design study", start_url: "/", display: "standalone" }],
         ["/health", { ok: true, mode: config.mode }],
       ]);
-      if (publicData.has(pathname))
-        return reply(response, 200, publicData.get(pathname));
+      if (publicData.has(pathname)) return reply(response, 200, publicData.get(pathname));
       if (request.method !== "GET" && !checkOrigin(request))
         return reply(response, 403, { error: "Origin rejected" });
       if (pathname === "/study/login" && request.method === "POST")
@@ -1220,14 +1002,10 @@ export async function startGateway(config) {
       const session = authenticate(request);
       if (!session) {
         if (pathname === "/study/admin" && request.method === "GET")
-          return reply(response, 200, loginHtml, {
-            "Content-Type": "text/html; charset=utf-8",
-          });
+          return reply(response, 200, loginHtml, { "Content-Type": "text/html; charset=utf-8" });
         if (pathname.startsWith("/study/") || pathname.startsWith("/api/"))
           return reply(response, 401, { error: "Sign in first" });
-        return reply(response, 200, loginHtml, {
-          "Content-Type": "text/html; charset=utf-8",
-        });
+        return reply(response, 200, loginHtml, { "Content-Type": "text/html; charset=utf-8" });
       }
       return await handleAuthenticated(pathname, request, response, session);
     } catch (error) {
@@ -1247,12 +1025,9 @@ export async function startGateway(config) {
     socketPairs,
     limits,
     getConversationSettings: settingsFor,
-    onAssistantTimeline: (student, entries) =>
-      archiveImages(student, entries).catch(() => {}),
+    onAssistantTimeline: (student, entries) => archiveImages(student, entries).catch(() => {}),
   });
-  await new Promise((accept) =>
-    server.listen(config.port || 0, "127.0.0.1", accept)
-  );
+  await new Promise((accept) => server.listen(config.port || 0, "127.0.0.1", accept));
   const maintenance = setInterval(() => {
     for (const [token, session] of sessions)
       if (session.expires < Date.now()) {
@@ -1265,7 +1040,7 @@ export async function startGateway(config) {
       }
     for (const student of students.values())
       transcript(student).catch((error) =>
-        console.error("Transcript checkpoint failed:", error.message)
+        console.error("Transcript checkpoint failed:", error.message),
       );
   }, 15000);
   maintenance.unref();
@@ -1280,7 +1055,7 @@ export async function startGateway(config) {
       }
       for (const student of students.values())
         await transcript(student).catch((error) =>
-          console.error("Final transcript checkpoint failed:", error.message)
+          console.error("Final transcript checkpoint failed:", error.message),
         );
       for (const client of clients.values()) await client.close();
       await new Promise((accept) => server.close(accept));
@@ -1294,11 +1069,9 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
   writeFileSync(
     join(dirname(process.argv[2]), "gateway.json"),
     JSON.stringify({ port: gateway.port, mode: config.mode }),
-    { mode: 0o600 }
+    { mode: 0o600 },
   );
-  console.log(
-    `Study gateway ready on loopback port ${gateway.port} (${config.mode})`
-  );
+  console.log(`Study gateway ready on loopback port ${gateway.port} (${config.mode})`);
   for (const signal of ["SIGINT", "SIGTERM"])
     process.on(signal, async () => {
       await gateway.close();

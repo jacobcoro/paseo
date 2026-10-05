@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useReducer,
-  useState,
-  type Dispatch,
-} from "react";
+import { useCallback, useEffect, useMemo, useReducer, useState, type Dispatch } from "react";
 import { useRouter, usePathname, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 import { useAppSettings } from "@/hooks/use-settings";
@@ -31,9 +24,7 @@ const Student = z.object({
   model: z.string(),
 });
 const Records = z.object({
-  prompts: z.array(
-    z.object({ id: z.string(), text: z.string(), timestamp: z.string() })
-  ),
+  prompts: z.array(z.object({ id: z.string(), text: z.string(), timestamp: z.string() })),
   annotations: z.array(z.object({ id: z.string() }).passthrough()),
 });
 const Files = z.object({
@@ -45,7 +36,7 @@ const Files = z.object({
       bytes: z.number(),
       kind: z.enum(["upload", "output"]),
       recordedAt: z.string(),
-    })
+    }),
   ),
 });
 const DEFAULT_FORM = {
@@ -63,13 +54,8 @@ interface ResearchState {
   form: ResearchForm;
   saved: boolean;
 }
-type ResearchAction =
-  | { type: "change"; patch: Partial<ResearchForm> }
-  | { type: "saved" };
-function reduceForm(
-  state: ResearchState,
-  action: ResearchAction
-): ResearchState {
+type ResearchAction = { type: "change"; patch: Partial<ResearchForm> } | { type: "saved" };
+function reduceForm(state: ResearchState, action: ResearchAction): ResearchState {
   if (action.type === "saved") return { ...state, saved: true };
   return { form: { ...state.form, ...action.patch }, saved: false };
 }
@@ -105,29 +91,19 @@ interface StudySelectProps {
   options: { id: string; value: string; label: string }[];
   dispatch: Dispatch<ResearchAction>;
 }
-function StudySelect({
-  name,
-  label,
-  value,
-  options,
-  dispatch,
-}: StudySelectProps) {
+function StudySelect({ name, label, value, options, dispatch }: StudySelectProps) {
   const { i18n } = useTranslation();
   const translatedOptions = useMemo(
-    () =>
-      options.map((option) => ({
-        ...option,
-        label: studyLabel(option.label, i18n.language),
-      })),
-    [options, i18n.language]
+    () => options.map((option) => ({ ...option, label: studyLabel(option.label, i18n.language) })),
+    [options, i18n.language],
   );
   const display = useMemo(
     () => translatedOptions.find((item) => item.value === value) || null,
-    [translatedOptions, value]
+    [translatedOptions, value],
   );
   const change = useCallback(
     (next: string) => dispatch({ type: "change", patch: { [name]: next } }),
-    [name, dispatch]
+    [name, dispatch],
   );
   return (
     <SelectField
@@ -143,15 +119,10 @@ function StudySelect({
     />
   );
 }
-function StudyTextField({
-  name,
-  label,
-  value,
-  dispatch,
-}: Omit<StudySelectProps, "options">) {
+function StudyTextField({ name, label, value, dispatch }: Omit<StudySelectProps, "options">) {
   const change = useCallback(
     (text: string) => dispatch({ type: "change", patch: { [name]: text } }),
-    [name, dispatch]
+    [name, dispatch],
   );
   return (
     <Field label={studyLabel(label)}>
@@ -169,12 +140,9 @@ function ResearchSheet({ close }: { close: () => void }) {
   const { i18n } = useTranslation();
   const header = useMemo(
     () => ({ title: studyLabel(SHEET_HEADER.title, i18n.language) }),
-    [i18n.language]
+    [i18n.language],
   );
-  const [state, dispatch] = useReducer(reduceForm, {
-    form: DEFAULT_FORM,
-    saved: false,
-  });
+  const [state, dispatch] = useReducer(reduceForm, { form: DEFAULT_FORM, saved: false });
   const queryClient = useQueryClient();
   const records = useFetchQuery({
     dataShape: "value",
@@ -191,9 +159,7 @@ function ResearchSheet({ close }: { close: () => void }) {
         body: JSON.stringify(state.form),
       });
       if (!response.ok)
-        throw new Error(
-          "请填写当前任务与下一步行动 / Complete task and next action"
-        );
+        throw new Error("请填写当前任务与下一步行动 / Complete task and next action");
       return response.json();
     },
     onSuccess: () => {
@@ -203,18 +169,14 @@ function ResearchSheet({ close }: { close: () => void }) {
   });
   const prompts = useMemo(
     () => [
-      {
-        id: "non-ai",
-        value: "non-ai",
-        label: "未使用 AI 的设计步骤 / Non-AI step",
-      },
+      { id: "non-ai", value: "non-ai", label: "未使用 AI 的设计步骤 / Non-AI step" },
       ...(records.data?.prompts || []).map((prompt, index) => ({
         id: prompt.id,
         value: prompt.id,
         label: `${index + 1}. ${prompt.text.slice(0, 70)}`,
       })),
     ],
-    [records.data]
+    [records.data],
   );
   const fields = [
     { key: "task", label: "当前任务 / Current task" },
@@ -224,12 +186,7 @@ function ResearchSheet({ close }: { close: () => void }) {
   ] as const;
   const submit = useCallback(() => save.mutate(), [save]);
   return (
-    <AdaptiveModalSheet
-      visible
-      header={header}
-      onClose={close}
-      desktopMaxWidth={600}
-    >
+    <AdaptiveModalSheet visible header={header} onClose={close} desktopMaxWidth={600}>
       <View style={styles.form}>
         <StudySelect
           name="promptId"
@@ -269,21 +226,12 @@ function ResearchSheet({ close }: { close: () => void }) {
           dispatch={dispatch}
         />
         {records.isError && (
-          <Text style={styles.error}>
-            {studyLabel(records.error.message || "")}
-          </Text>
+          <Text style={styles.error}>{studyLabel(records.error.message || "")}</Text>
         )}
-        {save.isError && (
-          <Text style={styles.error}>
-            {studyLabel(save.error.message || "")}
-          </Text>
-        )}
-        {state.saved && (
-          <Text style={styles.text}>{studyLabel("已保存 / Saved")}</Text>
-        )}
+        {save.isError && <Text style={styles.error}>{studyLabel(save.error.message || "")}</Text>}
+        {state.saved && <Text style={styles.text}>{studyLabel("已保存 / Saved")}</Text>}
         <Text style={styles.muted}>
-          {records.data?.annotations.length || 0}{" "}
-          {studyLabel("条记录已保存 / records saved")}
+          {records.data?.annotations.length || 0} {studyLabel("条记录已保存 / records saved")}
         </Text>
         <Button onPress={submit} loading={save.isPending}>
           {studyLabel("保存记录 / Save record")}
@@ -309,18 +257,11 @@ function LanguageToggle() {
   const toggle = useCallback(() => change.mutate(), [change]);
   return (
     <>
-      <Button
-        size="sm"
-        variant="ghost"
-        onPress={toggle}
-        loading={change.isPending}
-      >
+      <Button size="sm" variant="ghost" onPress={toggle} loading={change.isPending}>
         {i18n.language === "en" ? "中文" : "English"}
       </Button>
       {change.isError && (
-        <Text style={styles.error}>
-          {studyLabel("Could not change language")}
-        </Text>
+        <Text style={styles.error}>{studyLabel("Could not change language")}</Text>
       )}
     </>
   );
@@ -352,25 +293,16 @@ export function StudyPanel() {
   const signOut = useCallback(() => logout.mutate(), [logout]);
   const connected = useHostRuntimeIsConnected(student.data?.serverId || "");
   useEffect(() => {
-    if (
-      !student.data ||
-      !connected ||
-      !["/", "/welcome", "/open-project"].includes(pathname)
-    )
+    if (!student.data || !connected || !["/", "/welcome", "/open-project"].includes(pathname))
       return;
     router.replace({
       pathname: "/h/[serverId]/agent/[agentId]",
-      params: {
-        serverId: student.data.serverId,
-        agentId: student.data.agentId,
-      },
+      params: { serverId: student.data.serverId, agentId: student.data.agentId },
     });
   }, [student.data, connected, pathname, router]);
   if (!student.data) return null;
   const modeLabel =
-    student.data.mode === "fixture"
-      ? "演示 · 固定回答 / Fixture demo"
-      : "Codex · Live";
+    student.data.mode === "fixture" ? "演示 · 固定回答 / Fixture demo" : "Codex · Live";
   return (
     <>
       <View style={styles.banner}>
@@ -378,9 +310,7 @@ export function StudyPanel() {
           <Text style={styles.text}>Lulu · {student.data.studentId}</Text>
           <Text style={styles.muted}>{studyLabel(modeLabel)}</Text>
           <Text style={styles.muted}>
-            {studyLabel(
-              "图片 / Images: PNG, JPEG, WebP · 4 / prompt · 2 MiB / image"
-            )}
+            {studyLabel("图片 / Images: PNG, JPEG, WebP · 4 / prompt · 2 MiB / image")}
           </Text>
         </View>
         <LanguageToggle />
@@ -390,20 +320,11 @@ export function StudyPanel() {
         <Button size="sm" variant="ghost" onPress={exportRecords}>
           {studyLabel("导出 / Export")}
         </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          loading={logout.isPending}
-          onPress={signOut}
-        >
+        <Button size="sm" variant="ghost" loading={logout.isPending} onPress={signOut}>
           {studyLabel("退出 / Sign out")}
         </Button>
       </View>
-      {logout.isError && (
-        <Text style={styles.error}>
-          {studyLabel(logout.error.message || "")}
-        </Text>
-      )}
+      {logout.isError && <Text style={styles.error}>{studyLabel(logout.error.message || "")}</Text>}
       <StudyTools student={student.data} />
       {open && <ResearchSheet close={closeSheet} />}
     </>
@@ -422,7 +343,7 @@ function StudyTools({ student }: StudyToolsProps) {
     ? routeParams.agentId[0]
     : routeParams.agentId;
   const focusedAgentId = useSessionStore(
-    (state) => state.sessions[student.serverId]?.focusedAgentId
+    (state) => state.sessions[student.serverId]?.focusedAgentId,
   );
   useEffect(() => {
     if (focusedAgentId || routeAgentId)
@@ -431,7 +352,7 @@ function StudyTools({ student }: StudyToolsProps) {
   const dictateCurrent = useCallback(() => dictate(setVoiceNotice), []);
   const readCurrent = useCallback(
     () => void readLatestReply(selectedAgentId, setVoiceNotice),
-    [selectedAgentId]
+    [selectedAgentId],
   );
   return (
     <>
@@ -445,18 +366,12 @@ function StudyTools({ student }: StudyToolsProps) {
         </Button>
         <MemoryControls />
       </View>
-      {!!voiceNotice && (
-        <Text style={styles.muted}>{studyLabel(voiceNotice)}</Text>
-      )}
+      {!!voiceNotice && <Text style={styles.muted}>{studyLabel(voiceNotice)}</Text>}
     </>
   );
 }
 
-function DocumentControls({
-  setNotice,
-}: {
-  setNotice: (message: string) => void;
-}) {
+function DocumentControls({ setNotice }: { setNotice: (message: string) => void }) {
   const queryClient = useQueryClient();
   const files = useFetchQuery({
     dataShape: "value",
@@ -476,8 +391,7 @@ function DocumentControls({
       if (!response.ok) throw new Error(result.error || "Upload failed");
       return result;
     },
-    onSuccess: () =>
-      void queryClient.invalidateQueries({ queryKey: ["study-files"] }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["study-files"] }),
   });
   const pick = useCallback(() => {
     const input = document.createElement("input");
@@ -497,19 +411,16 @@ function DocumentControls({
             let binary = "";
             for (let offset = 0; offset < bytes.length; offset += 0x8000)
               binary += String.fromCharCode(
-                ...bytes.subarray(
-                  offset,
-                  Math.min(offset + 0x8000, bytes.length)
-                )
+                ...bytes.subarray(offset, Math.min(offset + 0x8000, bytes.length)),
               );
             await upload.mutateAsync({ name: file.name, data: btoa(binary) });
           }
           setNotice("Upload complete. Ask about the file by name.");
         })().catch((error: unknown) =>
-          setNotice(error instanceof Error ? error.message : "Upload failed")
+          setNotice(error instanceof Error ? error.message : "Upload failed"),
         );
       },
-      { once: true }
+      { once: true },
     );
     input.click();
   }, [setNotice, upload]);
@@ -519,29 +430,14 @@ function DocumentControls({
   const uploadError = upload.error?.message || "Upload failed";
   return (
     <>
-      <Button
-        size="sm"
-        variant="ghost"
-        onPress={pick}
-        loading={upload.isPending}
-      >
+      <Button size="sm" variant="ghost" onPress={pick} loading={upload.isPending}>
         {studyLabel("Upload documents")}
       </Button>
       {files.data?.files.map((file) => (
-        <DocumentDownloadButton
-          key={file.id}
-          file={file}
-          onDownload={download}
-        />
+        <DocumentDownloadButton key={file.id} file={file} onDownload={download} />
       ))}
-      {upload.isError && (
-        <Text style={styles.error}>{studyLabel(uploadError || "")}</Text>
-      )}
-      {files.isError && (
-        <Text style={styles.error}>
-          {studyLabel(files.error.message || "")}
-        </Text>
-      )}
+      {upload.isError && <Text style={styles.error}>{studyLabel(uploadError || "")}</Text>}
+      {files.isError && <Text style={styles.error}>{studyLabel(files.error.message || "")}</Text>}
     </>
   );
 }
@@ -553,10 +449,7 @@ function DocumentDownloadButton({
   file: z.infer<typeof Files>["files"][number];
   onDownload: (id: string) => void;
 }) {
-  const download = useCallback(
-    () => onDownload(file.id),
-    [file.id, onDownload]
-  );
+  const download = useCallback(() => onDownload(file.id), [file.id, onDownload]);
   return (
     <Button size="sm" variant="ghost" onPress={download}>
       {file.name} · {studyLabel("Download")}
@@ -588,11 +481,9 @@ function MemoryControls() {
         body: JSON.stringify({ text }),
       });
       const result = await response.json();
-      if (!response.ok)
-        throw new Error(result.error || "Could not save memory");
+      if (!response.ok) throw new Error(result.error || "Could not save memory");
     },
-    onSuccess: () =>
-      void queryClient.invalidateQueries({ queryKey: ["study-memory"] }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["study-memory"] }),
   });
   const clear = useMutation({
     mutationFn: async () => {
@@ -615,9 +506,7 @@ function MemoryControls() {
       {open && (
         <View style={styles.memory}>
           <Text style={styles.muted}>
-            {studyLabel(
-              "Your notes for future chats. Keep private details out. Max 8 KiB."
-            )}
+            {studyLabel("Your notes for future chats. Keep private details out. Max 8 KiB.")}
           </Text>
           <EditingTextInput
             key={memory.data?.updatedAt || "loading"}
@@ -631,22 +520,14 @@ function MemoryControls() {
             <Button size="sm" onPress={saveMemory} loading={save.isPending}>
               {studyLabel("Save memory")}
             </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onPress={clearMemory}
-              loading={clear.isPending}
-            >
+            <Button size="sm" variant="ghost" onPress={clearMemory} loading={clear.isPending}>
               {studyLabel("Clear")}
             </Button>
           </View>
           {(memory.isError || save.isError || clear.isError) && (
             <Text style={styles.error}>
               {studyLabel(
-                memory.error?.message ||
-                  save.error?.message ||
-                  clear.error?.message ||
-                  ""
+                memory.error?.message || save.error?.message || clear.error?.message || "",
               )}
             </Text>
           )}
@@ -667,12 +548,12 @@ interface BrowserRecognition {
   addEventListener(
     type: "result",
     listener: (event: SpeechResultEvent) => void,
-    options?: AddEventListenerOptions
+    options?: AddEventListenerOptions,
   ): void;
   addEventListener(
     type: "error" | "end",
     listener: () => void,
-    options?: AddEventListenerOptions
+    options?: AddEventListenerOptions,
   ): void;
 }
 interface RecognitionWindow extends Window {
@@ -689,49 +570,34 @@ function dictate(setNotice: (message: string) => void) {
     return;
   }
   const recognition = new Recognition();
-  recognition.lang =
-    localStorage.getItem("study.language") === "en" ? "en-US" : "zh-CN";
+  recognition.lang = localStorage.getItem("study.language") === "en" ? "en-US" : "zh-CN";
   recognition.interimResults = false;
   recognition.maxAlternatives = 1;
   recognition.addEventListener(
     "result",
     (event) => {
       const phrase = event.results[0]?.[0]?.transcript;
-      const input = document.querySelector<HTMLTextAreaElement>(
-        "textarea[data-composer-input]"
-      );
+      const input = document.querySelector<HTMLTextAreaElement>("textarea[data-composer-input]");
       if (!phrase || !input) {
         setNotice(
-          phrase
-            ? "Open the message box, then try dictation again."
-            : "No speech was detected."
+          phrase ? "Open the message box, then try dictation again." : "No speech was detected.",
         );
         return;
       }
-      const setter = Object.getOwnPropertyDescriptor(
-        HTMLTextAreaElement.prototype,
-        "value"
-      )?.set;
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
       setter?.call(input, input.value ? `${input.value} ${phrase}` : phrase);
       input.dispatchEvent(
-        new InputEvent("input", {
-          bubbles: true,
-          inputType: "insertText",
-          data: phrase,
-        })
+        new InputEvent("input", { bubbles: true, inputType: "insertText", data: phrase }),
       );
       input.focus();
       setNotice("Dictation added. Review the text before sending.");
     },
-    { once: true }
+    { once: true },
   );
   recognition.addEventListener(
     "error",
-    () =>
-      setNotice(
-        "Dictation failed. Check browser microphone access and network."
-      ),
-    { once: true }
+    () => setNotice("Dictation failed. Check browser microphone access and network."),
+    { once: true },
   );
   setNotice("Listening…");
   try {
@@ -741,15 +607,10 @@ function dictate(setNotice: (message: string) => void) {
   }
 }
 
-async function readLatestReply(
-  agentId: string,
-  setNotice: (message: string) => void
-) {
+async function readLatestReply(agentId: string, setNotice: (message: string) => void) {
   if (!agentId) return;
   try {
-    const response = await fetch(
-      `/study/latest?agentId=${encodeURIComponent(agentId)}`
-    );
+    const response = await fetch(`/study/latest?agentId=${encodeURIComponent(agentId)}`);
     const result = await response.json();
     if (!response.ok) {
       setNotice(result.error || "Could not load the latest reply.");
@@ -759,17 +620,14 @@ async function readLatestReply(
       setNotice("This chat has no reply yet.");
       return;
     }
-    if (
-      !("speechSynthesis" in window) ||
-      typeof SpeechSynthesisUtterance === "undefined"
-    ) {
+    if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
       setNotice("Read aloud is unavailable in this browser.");
       return;
     }
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(new SpeechSynthesisUtterance(result.text));
     setNotice(
-      "Reading the latest reply. Browser speech may need a network connection and may not work in China."
+      "Reading the latest reply. Browser speech may need a network connection and may not work in China.",
     );
   } catch {
     setNotice("Could not connect to the study service.");
