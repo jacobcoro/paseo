@@ -2153,6 +2153,39 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
   );
 
   registerTool(
+    "release_idle_agent",
+    {
+      title: "Release idle agent runtime",
+      description:
+        "Release an idle model process while retaining the saved conversation. Running turns are never interrupted.",
+      inputSchema: { agentId: z.string() },
+      outputSchema: { success: z.boolean() },
+    },
+    async ({ agentId }) => {
+      const agent = agentManager.getAgent(agentId);
+      if (
+        agent &&
+        (agentManager.hasInFlightRun(agentId) ||
+          agent.lifecycle === "running" ||
+          agent.lifecycle === "initializing")
+      ) {
+        return { content: [], structuredContent: ensureValidJson({ success: false }) };
+      }
+      if (agent) {
+        const empty = agent.lastUserMessageAt === null;
+        await closeAgentCommand({ agentManager }, agentId);
+        // Codex does not write a rollout for a thread with no user turn. Such a
+        // conversation must start from its saved config when opened again.
+        if (empty && agent.provider === "codex") {
+          const record = await agentStorage.get(agentId);
+          if (record) await agentStorage.upsert({ ...record, persistence: null });
+        }
+      }
+      return { content: [], structuredContent: ensureValidJson({ success: true }) };
+    },
+  );
+
+  registerTool(
     "kill_agent",
     {
       title: "Kill agent",

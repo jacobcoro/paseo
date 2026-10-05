@@ -66,3 +66,15 @@ Before a classroom run:
 4. Choose production authentication, storage, backup, retention, hosting and access in the students' region. Verify the selected provider's account/API terms for shared classroom use. Do not infer provider concurrency from frontend connection count.
 
 Upstream base: getpaseo/paseo 8216e86 (Apache-2.0). The original lulu-research checkout is not required by this demo.
+
+## Student tools and saved conversations
+
+The study panel has a New chat button and a saved conversation picker. All conversations belong to the same student and retain their independent history; files and optional explicit memory are shared within that student's workspace. A maximum of 20 saved live conversations and one creation per minute apply. The recorder collects all prompts, replies, uploaded originals, generated outputs and reflections without a student export. Legacy records remain in the researcher view and export.
+
+The gateway releases an idle native model process before another conversation loads, preserving its durable session. It refuses a switch while a turn is running. Checkpointing refreshes the selected conversation and retains other saved groups instead of waking every saved model process. This bounds idle process growth, but does not certify 60 students' model or tool capacity.
+
+PDF, DOCX, XLSX, PPTX, TXT, Markdown, CSV and JSON uploads use a separate file control: 8 MiB per file and 100 MiB total per student. Students then ask about the uploaded file by name. The study MCP tools list/read files, run actual Python calculations, create downloadable charts/documents, save text, and manage explicit student memory. Three checked workflows cover research, documents and analysis. The generated output URL requires a student or researcher login.
+
+Build the computation image with `study/compute.Dockerfile`, then run `node study/tool-worker.mjs <private-config.json>` as a bounded service. The private config supplies registered student workspaces and the same records directory as the gateway. Each disposable computation has no network, GPT credentials or desktop mounts: 768 MiB RAM, zero swap, one CPU, 64 PIDs and an independent 40-second process timeout. The trusted worker admits at most four active jobs plus 64 queued requests; bound its service memory separately. On restart it reaps only containers carrying both its computation ownership and matching runtime labels. Python supports pandas, matplotlib, Word, Excel, PowerPoint and PDF libraries; it cannot install software or call external APIs.
+
+Browser dictation and reply read-aloud are convenience controls, dependent on browser support and network availability. They are not ChatGPT live voice. Personal connected apps are not enabled: a separate shared account/folder and explicit access scope must be selected first. This demo retains hosted web search and native image generation with GPT 6.1 Sol at high reasoning effort. No provider allowance or 60-person classroom capacity has been established for this expanded profile.

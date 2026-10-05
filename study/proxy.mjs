@@ -4,6 +4,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { studentMessage } from "./policy.mjs";
 import { persistImages } from "./images.mjs";
 import { rewriteGeneratedImageMarkdown } from "./outputs.mjs";
+import { documentRecords } from "./documents.mjs";
 
 function rewriteImages(text, records, origin) {
   return rewriteGeneratedImageMarkdown(text, records, origin + "/study/output/");
@@ -34,6 +35,7 @@ export function installProxy({
   socketPairs,
   limits,
   onAssistantTimeline,
+  prepareConversation,
 }) {
   const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 12 * 1024 * 1024 });
   server.on("upgrade", (request, socket, head) => {
@@ -78,6 +80,21 @@ export function installProxy({
           );
           return;
         }
+        if (
+          allowed.message?.agentId &&
+          [
+            "send_agent_message_request",
+            "fetch_agent_timeline_request",
+            "agent.timeline.set_subscription.request",
+          ].includes(allowed.message.type)
+        ) {
+          try {
+            await prepareConversation?.(session.student, allowed.message.agentId);
+          } catch (error) {
+            deny(browser, allowed.message, error.message);
+            return;
+          }
+        }
         if (allowed.type === "session" && allowed.message.type === "send_agent_message_request") {
           const quotaError = limits.prompt(session.student);
           if (quotaError) {
@@ -95,7 +112,11 @@ export function installProxy({
             join(config.recordsDir, `${session.studentId}.requests.jsonl`),
             JSON.stringify({
               receivedAt: new Date().toISOString(),
+              agentId: allowed.message.agentId,
               message: { ...allowed.message, images },
+              documents: documentRecords(config, session.student).map(
+                ({ id, name, mimeType, bytes, kind }) => ({ id, name, mimeType, bytes, kind }),
+              ),
             }) + "\n",
             { mode: 0o600 },
           );
@@ -141,7 +162,9 @@ export function installProxy({
             const payload = message?.payload || message;
             const ownedAgents = [
               session.student.agentId,
+              ...(session.student.ownedConversationIds || []),
               ...(session.student.historicalAgentIds || []),
+              ...(session.student.preservedAgentIds || []),
             ];
             const entries = [];
             function collect(value) {

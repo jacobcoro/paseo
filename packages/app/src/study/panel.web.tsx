@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useState, type Dispatch } from "react";
-import { useRouter, usePathname } from "expo-router";
+import { useRouter, usePathname, useLocalSearchParams } from "expo-router";
+import { useSessionStore } from "@/stores/session-store";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -10,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FormTextInput } from "@/components/ui/form-field";
 import { SelectField } from "@/components/ui/select-field";
 import { AdaptiveModalSheet } from "@/components/adaptive-modal-sheet";
+import { EditingTextInput } from "@/components/ui/text-input";
 
 const Student = z.object({
   studentId: z.string(),
@@ -21,6 +23,27 @@ const Student = z.object({
 const Records = z.object({
   prompts: z.array(z.object({ id: z.string(), text: z.string(), timestamp: z.string() })),
   annotations: z.array(z.object({ id: z.string() }).passthrough()),
+});
+const Conversation = z.object({
+  agentId: z.string(),
+  title: z.string(),
+  createdAt: z.string().nullable(),
+  readonly: z.boolean(),
+});
+const Conversations = z.object({
+  conversations: z.array(Conversation),
+});
+const Files = z.object({
+  files: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      mimeType: z.string(),
+      bytes: z.number(),
+      kind: z.enum(["upload", "output"]),
+      recordedAt: z.string(),
+    }),
+  ),
 });
 const DEFAULT_FORM = {
   promptId: "non-ai",
@@ -212,6 +235,8 @@ function ResearchSheet({ close }: { close: () => void }) {
   );
 }
 
+type StudyStudent = z.infer<typeof Student>;
+
 export function StudyPanel() {
   const [open, setOpen] = useState(false);
   const student = useFetchQuery({
@@ -222,19 +247,6 @@ export function StudyPanel() {
   });
   const router = useRouter();
   const pathname = usePathname();
-  const connected = useHostRuntimeIsConnected(student.data?.serverId || "");
-  useEffect(() => {
-    if (
-      !student.data ||
-      !connected ||
-      !["/", "/welcome", "/open-project", "/new", "/history", "/settings"].includes(pathname)
-    )
-      return;
-    router.replace({
-      pathname: "/h/[serverId]/agent/[agentId]",
-      params: { serverId: student.data.serverId, agentId: student.data.agentId },
-    });
-  }, [student.data, connected, pathname, router]);
   const logout = useMutation({
     mutationFn: async () => {
       const response = await fetch("/study/logout", { method: "POST" });
@@ -248,6 +260,19 @@ export function StudyPanel() {
     window.location.href = "/study/export";
   }, []);
   const signOut = useCallback(() => logout.mutate(), [logout]);
+  const connected = useHostRuntimeIsConnected(student.data?.serverId || "");
+  useEffect(() => {
+    if (
+      !student.data ||
+      !connected ||
+      !["/", "/welcome", "/open-project", "/new", "/history", "/settings"].includes(pathname)
+    )
+      return;
+    router.replace({
+      pathname: "/h/[serverId]/agent/[agentId]",
+      params: { serverId: student.data.serverId, agentId: student.data.agentId },
+    });
+  }, [student.data, connected, pathname, router]);
   if (!student.data) return null;
   const modeLabel =
     student.data.mode === "fixture" ? "演示 · 固定回答 / Fixture demo" : "Codex · Live";
@@ -272,9 +297,384 @@ export function StudyPanel() {
         </Button>
       </View>
       {logout.isError && <Text style={styles.error}>{logout.error.message}</Text>}
+      <StudyTools student={student.data} />
       {open && <ResearchSheet close={closeSheet} />}
     </>
   );
+}
+
+interface StudyToolsProps {
+  student: StudyStudent;
+}
+
+function StudyTools({ student }: StudyToolsProps) {
+  const [selectedAgentId, setSelectedAgentId] = useState(student.agentId);
+  const [voiceNotice, setVoiceNotice] = useState("");
+  const router = useRouter();
+  const routeParams = useLocalSearchParams<{ agentId?: string | string[] }>();
+  const routeAgentId = Array.isArray(routeParams.agentId)
+    ? routeParams.agentId[0]
+    : routeParams.agentId;
+  useEffect(() => {
+    if (routeAgentId) setSelectedAgentId(routeAgentId);
+  }, [routeAgentId]);
+  const focusedAgentId = useSessionStore(
+    (state) => state.sessions[student.serverId]?.focusedAgentId,
+  );
+  useEffect(() => {
+    if (focusedAgentId) setSelectedAgentId(focusedAgentId);
+  }, [focusedAgentId]);
+  const queryClient = useQueryClient();
+  const conversations = useFetchQuery({
+    dataShape: "value",
+    staleTimeMs: 2000,
+    queryKey: ["study-conversations"],
+    queryFn: async () => Conversations.parse(await getJson("/study/conversations")),
+    refetchInterval: 10000,
+  });
+  const options = useMemo(
+    () =>
+      (conversations.data?.conversations || []).map((conversation) => ({
+        id: conversation.agentId,
+        value: conversation.agentId,
+        label: conversation.title,
+        description: conversation.readonly ? "Read only" : undefined,
+      })),
+    [conversations.data],
+  );
+  const selected = useMemo(
+    () => options.find((item) => item.value === selectedAgentId) || options[0] || null,
+    [options, selectedAgentId],
+  );
+  const create = useMutation({
+    mutationFn: async () => {
+      const response = await fetch("/study/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "New chat" }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not create chat");
+      return Conversation.parse(result);
+    },
+    onSuccess: async (conversation) => {
+      await queryClient.invalidateQueries({ queryKey: ["study-conversations"] });
+      setSelectedAgentId(conversation.agentId);
+      router.replace({
+        pathname: "/h/[serverId]/agent/[agentId]",
+        params: { serverId: student.serverId, agentId: conversation.agentId },
+      });
+    },
+  });
+  const switchConversation = useCallback(
+    (agentId: string) => {
+      setSelectedAgentId(agentId);
+      router.replace({
+        pathname: "/h/[serverId]/agent/[agentId]",
+        params: { serverId: student.serverId, agentId },
+      });
+    },
+    [router, student.serverId],
+  );
+  const selectedDisplay = useMemo(() => (selected ? { label: selected.label } : null), [selected]);
+  const createNewChat = useCallback(() => create.mutate(), [create]);
+  const dictateCurrent = useCallback(() => dictate(setVoiceNotice), []);
+  const readCurrent = useCallback(
+    () => void readLatestReply(selected?.value || "", setVoiceNotice),
+    [selected],
+  );
+  return (
+    <>
+      <View style={styles.tools}>
+        <SelectField
+          label="Chat / 对话"
+          value={selected?.value || null}
+          selectedDisplay={selectedDisplay}
+          options={options}
+          onChange={switchConversation}
+          placeholder="Choose chat"
+          emptyText="No chats"
+          searchable
+          size="sm"
+          disabled={!options.length}
+        />
+        <Button size="sm" onPress={createNewChat} loading={create.isPending}>
+          New chat
+        </Button>
+        {create.isError && <Text style={styles.error}>{create.error.message}</Text>}
+        <DocumentControls setNotice={setVoiceNotice} />
+        <Button size="sm" variant="ghost" onPress={dictateCurrent}>
+          Dictate
+        </Button>
+        <Button size="sm" variant="ghost" onPress={readCurrent}>
+          Read latest reply
+        </Button>
+        <MemoryControls />
+      </View>
+      {!!voiceNotice && <Text style={styles.muted}>{voiceNotice}</Text>}
+    </>
+  );
+}
+
+function DocumentControls({ setNotice }: { setNotice: (message: string) => void }) {
+  const queryClient = useQueryClient();
+  const files = useFetchQuery({
+    dataShape: "value",
+    staleTimeMs: 2000,
+    queryKey: ["study-files"],
+    queryFn: async () => Files.parse(await getJson("/study/files")),
+    refetchInterval: 10000,
+  });
+  const upload = useMutation({
+    mutationFn: async (input: { name: string; data: string }) => {
+      const response = await fetch("/study/files", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Upload failed");
+      return result;
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["study-files"] }),
+  });
+  const pick = useCallback(() => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.accept = ".pdf,.docx,.xlsx,.pptx,.txt,.md,.csv,.json";
+    input.addEventListener(
+      "change",
+      () => {
+        void (async () => {
+          for (const file of Array.from(input.files || [])) {
+            if (file.size > 8 * 1024 * 1024) {
+              setNotice(`${file.name}: file is over 8 MiB`);
+              continue;
+            }
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            let binary = "";
+            for (let offset = 0; offset < bytes.length; offset += 0x8000)
+              binary += String.fromCharCode(
+                ...bytes.subarray(offset, Math.min(offset + 0x8000, bytes.length)),
+              );
+            await upload.mutateAsync({ name: file.name, data: btoa(binary) });
+          }
+          setNotice("Upload complete. Ask about the file by name.");
+        })().catch((error: unknown) =>
+          setNotice(error instanceof Error ? error.message : "Upload failed"),
+        );
+      },
+      { once: true },
+    );
+    input.click();
+  }, [setNotice, upload]);
+  const download = useCallback((id: string) => {
+    window.location.href = `/study/file/${encodeURIComponent(id)}`;
+  }, []);
+  const uploadError = upload.error?.message || "Upload failed";
+  return (
+    <>
+      <Button size="sm" variant="ghost" onPress={pick} loading={upload.isPending}>
+        Upload documents
+      </Button>
+      {files.data?.files.map((file) => (
+        <DocumentDownloadButton key={file.id} file={file} onDownload={download} />
+      ))}
+      {upload.isError && <Text style={styles.error}>{uploadError}</Text>}
+      {files.isError && <Text style={styles.error}>{files.error.message}</Text>}
+    </>
+  );
+}
+
+function DocumentDownloadButton({
+  file,
+  onDownload,
+}: {
+  file: z.infer<typeof Files>["files"][number];
+  onDownload: (id: string) => void;
+}) {
+  const download = useCallback(() => onDownload(file.id), [file.id, onDownload]);
+  return (
+    <Button size="sm" variant="ghost" onPress={download}>
+      {file.name} · Download
+    </Button>
+  );
+}
+
+function MemoryControls() {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const queryClient = useQueryClient();
+  const memory = useFetchQuery({
+    dataShape: "value",
+    staleTimeMs: 2000,
+    queryKey: ["study-memory"],
+    queryFn: async () =>
+      z
+        .object({ text: z.string(), updatedAt: z.string().nullable() })
+        .parse(await getJson("/study/memory")),
+  });
+  useEffect(() => {
+    if (memory.data) setText(memory.data.text);
+  }, [memory.data]);
+  const save = useMutation({
+    mutationFn: async () => {
+      const response = await fetch("/study/memory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not save memory");
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["study-memory"] }),
+  });
+  const clear = useMutation({
+    mutationFn: async () => {
+      const response = await fetch("/study/memory", { method: "DELETE" });
+      if (!response.ok) throw new Error("Could not clear memory");
+    },
+    onSuccess: () => {
+      setText("");
+      void queryClient.invalidateQueries({ queryKey: ["study-memory"] });
+    },
+  });
+  const toggle = useCallback(() => setOpen((value) => !value), []);
+  const saveMemory = useCallback(() => save.mutate(), [save]);
+  const clearMemory = useCallback(() => clear.mutate(), [clear]);
+  return (
+    <>
+      <Button size="sm" variant="ghost" onPress={toggle}>
+        {open ? "Hide memory" : "Memory"}
+      </Button>
+      {open && (
+        <View style={styles.memory}>
+          <Text style={styles.muted}>
+            Your notes for future chats. Keep private details out. Max 8 KiB.
+          </Text>
+          <EditingTextInput
+            key={memory.data?.updatedAt || "loading"}
+            multiline
+            initialValue={memory.data?.text || ""}
+            onChangeText={setText}
+            style={styles.memoryInput}
+            accessibilityLabel="Study memory"
+          />
+          <View style={styles.memoryActions}>
+            <Button size="sm" onPress={saveMemory} loading={save.isPending}>
+              Save memory
+            </Button>
+            <Button size="sm" variant="ghost" onPress={clearMemory} loading={clear.isPending}>
+              Clear
+            </Button>
+          </View>
+          {(memory.isError || save.isError || clear.isError) && (
+            <Text style={styles.error}>
+              {memory.error?.message || save.error?.message || clear.error?.message}
+            </Text>
+          )}
+        </View>
+      )}
+    </>
+  );
+}
+
+interface SpeechResultEvent extends Event {
+  results: ArrayLike<ArrayLike<{ transcript: string }>>;
+}
+interface BrowserRecognition {
+  lang: string;
+  interimResults: boolean;
+  maxAlternatives: number;
+  start(): void;
+  addEventListener(
+    type: "result",
+    listener: (event: SpeechResultEvent) => void,
+    options?: AddEventListenerOptions,
+  ): void;
+  addEventListener(
+    type: "error" | "end",
+    listener: () => void,
+    options?: AddEventListenerOptions,
+  ): void;
+}
+interface RecognitionWindow extends Window {
+  SpeechRecognition?: new () => BrowserRecognition;
+  webkitSpeechRecognition?: new () => BrowserRecognition;
+}
+
+function dictate(setNotice: (message: string) => void) {
+  const Recognition =
+    (window as RecognitionWindow).SpeechRecognition ||
+    (window as RecognitionWindow).webkitSpeechRecognition;
+  if (!Recognition) {
+    setNotice("Dictation is unavailable in this browser.");
+    return;
+  }
+  const recognition = new Recognition();
+  recognition.lang = navigator.language || "zh-CN";
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  recognition.addEventListener(
+    "result",
+    (event) => {
+      const phrase = event.results[0]?.[0]?.transcript;
+      const input = document.querySelector<HTMLTextAreaElement>("textarea[data-composer-input]");
+      if (!phrase || !input) {
+        setNotice(
+          phrase ? "Open the message box, then try dictation again." : "No speech was detected.",
+        );
+        return;
+      }
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      setter?.call(input, input.value ? `${input.value} ${phrase}` : phrase);
+      input.dispatchEvent(
+        new InputEvent("input", { bubbles: true, inputType: "insertText", data: phrase }),
+      );
+      input.focus();
+      setNotice("Dictation added. Review the text before sending.");
+    },
+    { once: true },
+  );
+  recognition.addEventListener(
+    "error",
+    () => setNotice("Dictation failed. Check browser microphone access and network."),
+    { once: true },
+  );
+  setNotice("Listening…");
+  try {
+    recognition.start();
+  } catch {
+    setNotice("Dictation could not start. Check browser microphone access.");
+  }
+}
+
+async function readLatestReply(agentId: string, setNotice: (message: string) => void) {
+  if (!agentId) return;
+  try {
+    const response = await fetch(`/study/latest?agentId=${encodeURIComponent(agentId)}`);
+    const result = await response.json();
+    if (!response.ok) {
+      setNotice(result.error || "Could not load the latest reply.");
+      return;
+    }
+    if (!result.text) {
+      setNotice("This chat has no reply yet.");
+      return;
+    }
+    if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
+      setNotice("Read aloud is unavailable in this browser.");
+      return;
+    }
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(result.text));
+    setNotice(
+      "Reading the latest reply. Browser speech may need a network connection and may not work in China.",
+    );
+  } catch {
+    setNotice("Could not connect to the study service.");
+  }
 }
 
 const styles = StyleSheet.create((theme) => ({
@@ -290,6 +690,32 @@ const styles = StyleSheet.create((theme) => ({
     borderBottomColor: theme.colors.border,
   },
   identity: { flex: 1, minWidth: 160, gap: theme.spacing[1] },
+  tools: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: theme.spacing[2],
+    paddingHorizontal: theme.spacing[4],
+    paddingVertical: theme.spacing[2],
+    backgroundColor: theme.colors.surface1,
+  },
+  memory: {
+    gap: theme.spacing[2],
+    paddingHorizontal: theme.spacing[4],
+    paddingVertical: theme.spacing[3],
+    backgroundColor: theme.colors.surface1,
+  },
+  memoryInput: {
+    minHeight: 80,
+    padding: theme.spacing[2],
+    color: theme.colors.foreground,
+    backgroundColor: theme.colors.surface2,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.borderRadius.md,
+    textAlignVertical: "top",
+  },
+  memoryActions: { flexDirection: "row", gap: theme.spacing[2] },
   text: { color: theme.colors.foreground, fontSize: theme.fontSize.base },
   muted: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
   error: { color: theme.colors.destructive, fontSize: theme.fontSize.sm },

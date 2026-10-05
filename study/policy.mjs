@@ -61,16 +61,30 @@ export function studentMessage(message, student) {
   if (message.type === "ping") return message;
   if (message.type !== "session") return null;
   const request = message.message;
-  if (!request || !(READS.has(request.type) || ACTIONS.has(request.type))) return null;
-  const ownedAgents = ACTIONS.has(request.type)
-    ? [student.agentId]
-    : [student.agentId, ...(student.historicalAgentIds || [])];
-  if (request.agentId && !ownedAgents.includes(request.agentId)) return null;
-  if (request.agentIds && request.agentIds.some((id) => !ownedAgents.includes(id))) return null;
-  if (request.workspaceId && request.workspaceId !== student.workspaceId) return null;
-  if (request.cwd && request.cwd !== "/workspace") return null;
-  if (!validAction(request)) return null;
+  if (!request || !requestAllowed(request, student)) return null;
   return message;
+}
+
+function requestAllowed(request, student) {
+  if (!(READS.has(request.type) || ACTIONS.has(request.type))) return false;
+  const ownAgents = [student.agentId, ...(student.ownedConversationIds || [])];
+  const ownedAgents = ACTIONS.has(request.type)
+    ? ownAgents
+    : [...ownAgents, ...(student.historicalAgentIds || []), ...(student.preservedAgentIds || [])];
+  const actionTargetIsOwned = !ACTIONS.has(request.type) || ownedAgents.includes(request.agentId);
+  const targetIsOwned = !request.agentId || ownedAgents.includes(request.agentId);
+  const allTargetsAreOwned =
+    !request.agentIds || !request.agentIds.some((id) => !ownedAgents.includes(id));
+  const workspaceIsOwned = !request.workspaceId || request.workspaceId === student.workspaceId;
+  const cwdIsOwned = !request.cwd || request.cwd === "/workspace";
+  return (
+    actionTargetIsOwned &&
+    targetIsOwned &&
+    allTargetsAreOwned &&
+    workspaceIsOwned &&
+    cwdIsOwned &&
+    validAction(request)
+  );
 }
 
 function validAction(request) {

@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { execFileSync } from "node:child_process";
 import { WebSocket } from "ws";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, writeFileSync, existsSync, copyFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, copyFileSync, cpSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { passwordHash } from "./gateway.mjs";
@@ -71,8 +71,17 @@ try {
       if (!process.env.STUDY_CODEX_BINARY || !process.env.STUDY_CODEX_AUTH)
         throw new Error("Live smoke requires STUDY_CODEX_BINARY and STUDY_CODEX_AUTH paths");
       copyFileSync(process.env.STUDY_CODEX_AUTH, join(codexHome, "auth.json"));
-      writeFileSync(join(codexHome, "config.toml"), studyCodexConfig());
+      writeFileSync(
+        join(codexHome, "config.toml"),
+        studyCodexConfig({ publicUrl: process.env.STUDY_PUBLIC_URL || "" }),
+      );
       writeFileSync(join(codexHome, "study-instructions.md"), studyInstructions, { mode: 0o600 });
+      writeFileSync(
+        join(codexHome, "study-tools.json"),
+        JSON.stringify({ publicUrl: process.env.STUDY_PUBLIC_URL || "" }),
+        { mode: 0o600 },
+      );
+      cpSync(join(root, "study/skills"), join(codexHome, "skills"), { recursive: true });
       liveMounts.push("-v", `${process.env.STUDY_CODEX_BINARY}:/usr/local/bin/codex:ro`);
     }
     execFileSync(
@@ -203,6 +212,7 @@ try {
         serverId: status.serverId,
         agentId: agent.id,
         workspaceId: created.workspace.id,
+        workspacePath: workspace,
       });
       writeFileSync(join(directory, `${id}.login.txt`), `${id}\n${password}\n`, { mode: 0o600 });
       console.log(`Prepared ${id}: ${agent.id} (${mode})`);
