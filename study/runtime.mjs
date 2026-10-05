@@ -111,7 +111,8 @@ try {
         `${process.getuid()}:${process.getgid()}`,
         "--read-only",
         "--cap-drop=ALL",
-        "--pids-limit=128",
+        // Codex's tool host needs thread headroom beyond the daemon and model process.
+        mode === "live" ? "--pids-limit=256" : "--pids-limit=128",
         "--memory=1536m",
         "--cpus=1",
         "--tmpfs",
