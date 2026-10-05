@@ -233,6 +233,7 @@ function WorkspaceNewTabButton({
   placement,
 }: WorkspaceNewTabButtonProps) {
   const { t } = useTranslation();
+  if (process.env.EXPO_PUBLIC_LULU_STUDY === "1") return null;
   const tooltipText = t("workspace.tabs.actions.newTab");
   const menu = (
     <DropdownMenu>

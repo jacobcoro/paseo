@@ -1139,6 +1139,10 @@ function extractErrorMessage(error: unknown): string | null {
   return null;
 }
 
+function studyControl<T>(value: T): T | false {
+  return process.env.EXPO_PUBLIC_LULU_STUDY === "1" ? false : value;
+}
+
 export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
   function MessageInput(props, ref) {
     const {
@@ -1847,7 +1851,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
             <View style={styles.rightButtonGroup}>
               {beforeVoiceContent}
               <VoiceButtonTooltip
-                visible={mode.showVoice}
+                visible={studyControl(mode.showVoice)}
                 onVoicePress={handleVoicePress}
                 isDictationStartEnabled={isDictationStartEnabled}
                 voiceButtonAccessibilityLabel={voiceButtonAccessibilityLabel}
@@ -1858,7 +1862,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
                 voiceMuteToggleKeys={voiceMuteToggleKeys}
                 dictationToggleKeys={dictationToggleKeys}
               />
-              {rightContent}
+              {studyControl(rightContent)}
               <PrimaryAction
                 kind={primaryActionKind}
                 activeActionContent={activeActionContent}

@@ -427,6 +427,8 @@ function ProjectRowTrailingActions({
   removeProjectStatus: "idle" | "pending" | "success";
 }) {
   const actionsVisible = isHovered || platformIsNative || isMobileBreakpoint;
+  if (process.env.EXPO_PUBLIC_LULU_STUDY === "1") return null;
+
   return (
     <View style={styles.projectTrailingActions}>
       {worktreeTarget ? (
@@ -812,6 +814,8 @@ function NewWorkspaceGhostRow({
     ],
     [],
   );
+
+  if (process.env.EXPO_PUBLIC_LULU_STUDY === "1") return null;
 
   return (
     <Pressable

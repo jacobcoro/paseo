@@ -71,5 +71,12 @@ export function useSidebarNavItems<Section extends SidebarSection>(
     [field, pluginGroups, section, updateSettings],
   );
 
-  return { items, setVisible, move };
+  const visibleItems =
+    process.env.EXPO_PUBLIC_LULU_STUDY === "1"
+      ? items.map((item) => ({
+          ...item,
+          visible: item.kind === "builtin" && item.key === "history",
+        }))
+      : items;
+  return { items: visibleItems, setVisible, move };
 }
