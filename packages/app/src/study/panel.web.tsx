@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useState, type Dispatch } 
 import { useRouter, usePathname, useLocalSearchParams } from "expo-router";
 import { useTranslation } from "react-i18next";
 import { useAppSettings } from "@/hooks/use-settings";
-import { studyLabel } from "./language";
+import { studyLabel } from "./language.web";
 import { useSessionStore } from "@/stores/session-store";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { Text, View } from "react-native";
