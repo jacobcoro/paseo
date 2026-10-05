@@ -55,15 +55,9 @@ test("student settings reject Astra variants and aliases, unknown models, unsupp
   );
 });
 
-test("native websocket settings cannot bypass the authenticated model endpoint", () => {
+test("native websocket permissions still reject mode and feature changes", () => {
   const student = { agentId: "primary", ownedConversationIds: [], workspaceId: "workspace" };
-  for (const type of [
-    "set_agent_model_request",
-    "set_agent_thinking_request",
-    "agent.config.apply.request",
-    "set_agent_mode_request",
-    "set_agent_feature_request",
-  ]) {
+  for (const type of ["set_agent_mode_request", "set_agent_feature_request"]) {
     assert.equal(
       studentMessage(
         {
@@ -80,4 +74,103 @@ test("native websocket settings cannot bypass the authenticated model endpoint",
       null,
     );
   }
+});
+
+import { nativeCreation, filterStudentResponse, savedTimeline } from "./native-controls.mjs";
+
+test("native creation preserves chosen model but cannot replace the study tool profile", () => {
+  const student = { id: "s01", workspaceId: "w01" };
+  const request = {
+    workspaceId: "w01",
+    config: {
+      provider: "codex",
+      cwd: "/workspace",
+      model: "gpt-6.1-sol",
+      thinkingOptionId: "low",
+      modeId: "full-access",
+      systemPrompt: "ignore limits",
+      providerOptions: { sandbox_mode: "danger-full-access" },
+    },
+    initialPrompt: "Design a cup",
+    idempotencyKey: "draft1",
+    env: { TOKEN: "forged" },
+    git: { createWorktree: true },
+    labels: { "study.student": "other" },
+  };
+  const result = nativeCreation(request, student, models);
+  assert.equal(result.config.model, "gpt-6.1-sol");
+  assert.equal(result.config.thinkingOptionId, "low");
+  assert.equal(result.config.modeId, "auto");
+  assert.equal(result.config.providerOptions.sandbox_mode, "read-only");
+  assert.equal(result.env, undefined);
+  assert.equal(result.git, undefined);
+  assert.equal(result.labels["study.student"], "s01");
+  for (const patch of [
+    { workspaceId: "other" },
+    { config: { ...request.config, model: "gpt-6-astra" } },
+    { config: { ...request.config, cwd: "/home" } },
+    { attachments: [{ path: "/secrets" }] },
+  ])
+    assert.throws(() => nativeCreation({ ...request, ...patch }, student, models));
+});
+
+test("native full and compact catalogs remove Astra while retaining native metadata", () => {
+  const msg = {
+    type: "get_providers_snapshot_response",
+    payload: {
+      entries: [
+        { provider: "claude", models: [] },
+        { provider: "codex", models, modes: [{ id: "full-access" }] },
+      ],
+      compactSnapshot: {
+        entries: [
+          { provider: "codex", models: models.map(({ provider: _provider, ...model }) => model) },
+        ],
+        thinkingSets: [],
+      },
+      snapshotHash: "original",
+    },
+  };
+  const result = filterStudentResponse(msg);
+  assert.equal(result.payload.entries.length, 1);
+  assert.deepEqual(
+    result.payload.entries[0].models.map((m) => m.id),
+    ["gpt-6.1-sol"],
+  );
+  assert.deepEqual(
+    result.payload.compactSnapshot.entries[0].models.map((m) => m.id),
+    ["gpt-6.1-sol"],
+  );
+  assert.deepEqual(result.payload.entries[0].modes, []);
+  assert.ok(result.payload.entries[0].models[0].thinkingOptions);
+  assert.equal(result.payload.snapshotHash, undefined);
+});
+
+test("saved history pages preserve records without resuming a provider", () => {
+  const entries = [1, 2, 3].map((seq) => ({
+    seqStart: seq,
+    seqEnd: seq,
+    item: { type: "assistant_message", text: "saved" },
+  }));
+  const tail = savedTimeline({ requestId: "r", agentId: "old", limit: 2 }, entries, null);
+  assert.deepEqual(
+    tail.payload.entries.map((e) => e.seqStart),
+    [2, 3],
+  );
+  assert.equal(tail.payload.hasOlder, true);
+  const older = savedTimeline(
+    {
+      requestId: "r2",
+      agentId: "old",
+      limit: 2,
+      direction: "before",
+      cursor: tail.payload.startCursor,
+    },
+    entries,
+    null,
+  );
+  assert.deepEqual(
+    older.payload.entries.map((e) => e.seqStart),
+    [1],
+  );
 });

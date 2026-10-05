@@ -28,6 +28,8 @@ const READS = new Set([
   "agent.timeline.search.request",
   "agent.timeline.list_prompts.request",
   "get_providers_snapshot_request",
+  "refresh_providers_snapshot_request",
+  "creation.subscribe.request",
   "list_available_providers_request",
   "list_provider_models_request",
   "list_provider_modes_request",
@@ -48,7 +50,14 @@ const READS = new Set([
   "wait_for_finish_request",
   "subscription.release.request",
 ]);
-const ACTIONS = new Set(["send_agent_message_request", "cancel_agent_request"]);
+const ACTIONS = new Set([
+  "send_agent_message_request",
+  "cancel_agent_request",
+  "set_agent_model_request",
+  "set_agent_thinking_request",
+  "agent.config.apply.request",
+]);
+const CREATIONS = new Set(["agent.create.request"]);
 
 export function studentMessage(message, student) {
   if (message.type === "hello") {
@@ -66,16 +75,20 @@ export function studentMessage(message, student) {
 }
 
 function requestAllowed(request, student) {
-  if (!(READS.has(request.type) || ACTIONS.has(request.type))) return false;
+  if (!(READS.has(request.type) || ACTIONS.has(request.type) || CREATIONS.has(request.type)))
+    return false;
   const ownAgents = [student.agentId, ...(student.ownedConversationIds || [])];
   const ownedAgents = ACTIONS.has(request.type)
     ? ownAgents
     : [...ownAgents, ...(student.historicalAgentIds || []), ...(student.preservedAgentIds || [])];
   const actionTargetIsOwned = !ACTIONS.has(request.type) || ownedAgents.includes(request.agentId);
-  const targetIsOwned = !request.agentId || ownedAgents.includes(request.agentId);
+  const targetIsOwned =
+    CREATIONS.has(request.type) || !request.agentId || ownedAgents.includes(request.agentId);
   const allTargetsAreOwned =
     !request.agentIds || !request.agentIds.some((id) => !ownedAgents.includes(id));
-  const workspaceIsOwned = !request.workspaceId || request.workspaceId === student.workspaceId;
+  const workspaceIsOwned = CREATIONS.has(request.type)
+    ? request.workspaceId === student.workspaceId
+    : !request.workspaceId || request.workspaceId === student.workspaceId;
   const cwdIsOwned = !request.cwd || request.cwd === "/workspace";
   return (
     actionTargetIsOwned &&

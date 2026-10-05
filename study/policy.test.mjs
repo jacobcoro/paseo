@@ -55,14 +55,14 @@ test("student chat actions allow only live conversations owned by that student",
   );
 });
 
-test("student direct agent creation and model controls remain blocked", () => {
+test("student legacy agent creation and terminal access remain blocked", () => {
   assert.equal(
     studentMessage(request("create_agent_request", { workspaceId: student.workspaceId }), student),
     null,
   );
   assert.equal(
     studentMessage(
-      request("set_agent_model_request", { agentId: "primary", model: "other" }),
+      request("set_agent_model_request", { agentId: "other-student", modelId: "other" }),
       student,
     ),
     null,

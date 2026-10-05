@@ -727,7 +727,7 @@ function ControlledAgentControls({
     [onSelectModel, onSelectProvider, onSelectProviderAndModel, provider],
   );
 
-  if (process.env.EXPO_PUBLIC_LULU_STUDY === "1" || !hasAnyControl) {
+  if (!hasAnyControl) {
     return null;
   }
 

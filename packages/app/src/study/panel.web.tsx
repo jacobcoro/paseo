@@ -27,28 +27,6 @@ const Records = z.object({
   prompts: z.array(z.object({ id: z.string(), text: z.string(), timestamp: z.string() })),
   annotations: z.array(z.object({ id: z.string() }).passthrough()),
 });
-const Conversation = z.object({
-  agentId: z.string(),
-  title: z.string(),
-  createdAt: z.string().nullable(),
-  readonly: z.boolean(),
-});
-const Conversations = z.object({
-  conversations: z.array(Conversation),
-});
-const ModelSettings = z.object({
-  agentId: z.string(),
-  modelId: z.string(),
-  thinkingOptionId: z.string().nullable(),
-  models: z.array(
-    z.object({
-      id: z.string(),
-      label: z.string(),
-      defaultThinkingOptionId: z.string().nullable(),
-      thinkingOptions: z.array(z.object({ id: z.string(), label: z.string() })),
-    }),
-  ),
-});
 const Files = z.object({
   files: z.array(
     z.object({
@@ -314,11 +292,7 @@ export function StudyPanel() {
   const signOut = useCallback(() => logout.mutate(), [logout]);
   const connected = useHostRuntimeIsConnected(student.data?.serverId || "");
   useEffect(() => {
-    if (
-      !student.data ||
-      !connected ||
-      !["/", "/welcome", "/open-project", "/new", "/history", "/settings"].includes(pathname)
-    )
+    if (!student.data || !connected || !["/", "/welcome", "/open-project"].includes(pathname))
       return;
     router.replace({
       pathname: "/h/[serverId]/agent/[agentId]",
@@ -361,107 +335,27 @@ interface StudyToolsProps {
 }
 
 function StudyTools({ student }: StudyToolsProps) {
-  const { i18n } = useTranslation();
   const [selectedAgentId, setSelectedAgentId] = useState(student.agentId);
   const [voiceNotice, setVoiceNotice] = useState("");
-  const router = useRouter();
   const routeParams = useLocalSearchParams<{ agentId?: string | string[] }>();
   const routeAgentId = Array.isArray(routeParams.agentId)
     ? routeParams.agentId[0]
     : routeParams.agentId;
-  useEffect(() => {
-    if (routeAgentId) setSelectedAgentId(routeAgentId);
-  }, [routeAgentId]);
   const focusedAgentId = useSessionStore(
     (state) => state.sessions[student.serverId]?.focusedAgentId,
   );
   useEffect(() => {
-    if (focusedAgentId) setSelectedAgentId(focusedAgentId);
-  }, [focusedAgentId]);
-  const queryClient = useQueryClient();
-  const conversations = useFetchQuery({
-    dataShape: "value",
-    staleTimeMs: 2000,
-    queryKey: ["study-conversations"],
-    queryFn: async () => Conversations.parse(await getJson("/study/conversations")),
-    refetchInterval: 10000,
-  });
-  const options = useMemo(
-    () =>
-      (conversations.data?.conversations || []).map((conversation) => ({
-        id: conversation.agentId,
-        value: conversation.agentId,
-        label: conversation.title,
-        description: conversation.readonly ? studyLabel("Read only", i18n.language) : undefined,
-      })),
-    [conversations.data, i18n.language],
-  );
-  const selected = useMemo(
-    () => options.find((item) => item.value === selectedAgentId) || options[0] || null,
-    [options, selectedAgentId],
-  );
-  const create = useMutation({
-    mutationFn: async () => {
-      const response = await fetch("/study/conversations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: "New chat" }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Could not create chat");
-      return Conversation.parse(result);
-    },
-    onSuccess: async (conversation) => {
-      await queryClient.invalidateQueries({ queryKey: ["study-conversations"] });
-      setSelectedAgentId(conversation.agentId);
-      router.replace({
-        pathname: "/h/[serverId]/agent/[agentId]",
-        params: { serverId: student.serverId, agentId: conversation.agentId },
-      });
-    },
-  });
-  const switchConversation = useCallback(
-    (agentId: string) => {
-      setSelectedAgentId(agentId);
-      router.replace({
-        pathname: "/h/[serverId]/agent/[agentId]",
-        params: { serverId: student.serverId, agentId },
-      });
-    },
-    [router, student.serverId],
-  );
-  const selectedDisplay = useMemo(() => (selected ? { label: selected.label } : null), [selected]);
-  const createNewChat = useCallback(() => create.mutate(), [create]);
+    if (focusedAgentId || routeAgentId)
+      setSelectedAgentId(focusedAgentId || routeAgentId || student.agentId);
+  }, [focusedAgentId, routeAgentId, student.agentId]);
   const dictateCurrent = useCallback(() => dictate(setVoiceNotice), []);
   const readCurrent = useCallback(
-    () => void readLatestReply(selected?.value || "", setVoiceNotice),
-    [selected],
+    () => void readLatestReply(selectedAgentId, setVoiceNotice),
+    [selectedAgentId],
   );
   return (
     <>
       <View style={styles.tools}>
-        <SelectField
-          label={studyLabel("Chat / 对话")}
-          value={selected?.value || null}
-          selectedDisplay={selectedDisplay}
-          options={options}
-          onChange={switchConversation}
-          placeholder={studyLabel("Choose chat")}
-          emptyText={studyLabel("No chats")}
-          searchable
-          size="sm"
-          disabled={!options.length}
-        />
-        <Button size="sm" onPress={createNewChat} loading={create.isPending}>
-          {studyLabel("New chat")}
-        </Button>
-        {student.mode === "live" &&
-          conversations.data?.conversations.some(
-            (item) => item.agentId === selectedAgentId && !item.readonly,
-          ) && <ModelControls key={selectedAgentId} agentId={selectedAgentId} />}
-        {create.isError && (
-          <Text style={styles.error}>{studyLabel(create.error.message || "")}</Text>
-        )}
         <DocumentControls setNotice={setVoiceNotice} />
         <Button size="sm" variant="ghost" onPress={dictateCurrent}>
           {studyLabel("Dictate")}
@@ -472,109 +366,6 @@ function StudyTools({ student }: StudyToolsProps) {
         <MemoryControls />
       </View>
       {!!voiceNotice && <Text style={styles.muted}>{studyLabel(voiceNotice)}</Text>}
-    </>
-  );
-}
-
-function ModelControls({ agentId }: { agentId: string }) {
-  const { i18n } = useTranslation();
-  const queryClient = useQueryClient();
-  const queryKey = useMemo(() => ["study-model-settings", agentId], [agentId]);
-  const settings = useFetchQuery({
-    dataShape: "value",
-    staleTimeMs: 2000,
-    queryKey,
-    queryFn: async () =>
-      ModelSettings.parse(await getJson(`/study/settings?agentId=${encodeURIComponent(agentId)}`)),
-    refetchInterval: 10000,
-  });
-  const change = useMutation({
-    mutationFn: async (input: { modelId: string; thinkingOptionId: string }) => {
-      const response = await fetch("/study/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId, ...input }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Could not change model settings");
-      return ModelSettings.parse(result);
-    },
-    onSuccess: (result) => queryClient.setQueryData(queryKey, result),
-    onSettled: () => void queryClient.invalidateQueries({ queryKey }),
-  });
-  const model = settings.data?.models.find((item) => item.id === settings.data?.modelId);
-  const models = useMemo(
-    () =>
-      (settings.data?.models || []).map((item) => ({
-        id: item.id,
-        value: item.id,
-        label: item.label,
-      })),
-    [settings.data],
-  );
-  const levels = useMemo(
-    () =>
-      (model?.thinkingOptions || []).map((item) => ({
-        id: item.id,
-        value: item.id,
-        label: studyLabel(item.label, i18n.language),
-      })),
-    [model, i18n.language],
-  );
-  const chooseModel = useCallback(
-    (modelId: string) => {
-      const next = settings.data?.models.find((item) => item.id === modelId);
-      if (!next) return;
-      const current = settings.data?.thinkingOptionId;
-      const thinkingOptionId = next.thinkingOptions.some((item) => item.id === current)
-        ? current
-        : next.defaultThinkingOptionId;
-      if (thinkingOptionId) change.mutate({ modelId, thinkingOptionId });
-    },
-    [settings.data, change],
-  );
-  const chooseReasoning = useCallback(
-    (thinkingOptionId: string) => {
-      if (model) change.mutate({ modelId: model.id, thinkingOptionId });
-    },
-    [model, change],
-  );
-  const modelDisplay = useMemo(() => (model ? { label: model.label } : null), [model]);
-  const reasoningDisplay = useMemo(() => {
-    const level = levels.find((item) => item.id === settings.data?.thinkingOptionId);
-    return level ? { label: level.label } : null;
-  }, [levels, settings.data]);
-  return (
-    <>
-      <SelectField
-        label={studyLabel("模型 / Model")}
-        size="sm"
-        value={settings.data?.modelId || null}
-        selectedDisplay={modelDisplay}
-        options={models}
-        onChange={chooseModel}
-        disabled={change.isPending || !models.length}
-        placeholder={studyLabel("Loading models")}
-        emptyText={studyLabel("No models available")}
-        searchable
-      />
-      <SelectField
-        label={studyLabel("推理 / Reasoning")}
-        size="sm"
-        value={settings.data?.thinkingOptionId || null}
-        selectedDisplay={reasoningDisplay}
-        options={levels}
-        onChange={chooseReasoning}
-        disabled={change.isPending || !levels.length}
-        placeholder={studyLabel("Reasoning")}
-        emptyText={studyLabel("No reasoning options available")}
-      />
-      {change.isPending && <Text style={styles.muted}>{studyLabel("Saving settings…")}</Text>}
-      {(settings.isError || change.isError) && (
-        <Text style={styles.error}>
-          {studyLabel(change.error?.message || settings.error?.message || "")}
-        </Text>
-      )}
     </>
   );
 }

@@ -1,5 +1,3 @@
-import { i18n } from "@/i18n/i18next";
-
 const chinese: Record<string, string> = {
   "Codex · Live": "Codex · 实时对话",
   "Could not change language": "无法修改语言",
@@ -70,7 +68,10 @@ const chinese: Record<string, string> = {
   "Could not connect to the study service.": "无法连接研究网站。",
 };
 
-export function studyLabel(text: string, language = i18n.language): string {
+export function studyLabel(
+  text: string,
+  language = localStorage.getItem("study.language"),
+): string {
   const english = language === "en";
   const parts = text.split(" / ");
   if (parts.length === 2 && /[\u3400-\u9fff]/.test(parts[0])) return parts[english ? 1 : 0];
