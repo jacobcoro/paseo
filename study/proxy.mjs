@@ -104,6 +104,14 @@ export function installProxy({
         try {
           const handled = await handleStudentRequest(session.student, allowed.message);
           if (handled) {
+            const entries = handled.payload?.entries?.filter(
+              (entry) => entry.item?.type === "assistant_message",
+            );
+            if (entries?.length && onAssistantTimeline) {
+              const records = await onAssistantTimeline(session.student, entries);
+              for (const entry of entries)
+                entry.item.text = rewriteImages(entry.item.text, records || [], origin);
+            }
             browser.send(
               JSON.stringify({ type: "session", message: filterStudentResponse(handled) }),
             );
