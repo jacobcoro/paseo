@@ -2143,7 +2143,7 @@ function ComposerContentImpl({
       },
     );
     return process.env.EXPO_PUBLIC_LULU_STUDY === "1"
-      ? items.filter((item) => item.id === "image")
+      ? items.filter((item) => item.id === "image" || item.id === "file")
       : items;
   }, [
     forgePresentation,

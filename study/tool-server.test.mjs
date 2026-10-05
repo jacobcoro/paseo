@@ -7,7 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { startToolWorker } from "./tool-worker.mjs";
 
-test("real MCP transport reads workflows, persists own files and memory, and returns download links", async () => {
+test("real MCP transport reads workflows, persists own files and returns download links", async () => {
   const root = mkdtempSync(join(tmpdir(), "lulu-mcp-"));
   const config = {
     recordsDir: join(root, "records"),
@@ -28,7 +28,14 @@ test("real MCP transport reads workflows, persists own files and memory, and ret
   try {
     await client.connect(transport);
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 7);
+    assert.equal(listed.tools.length, 5);
+    assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
+      "list_files",
+      "read_file",
+      "read_skill",
+      "run_python",
+      "write_text",
+    ]);
     const workflow = await client.callTool({
       name: "read_skill",
       arguments: { name: "study-documents" },
@@ -45,9 +52,10 @@ test("real MCP transport reads workflows, persists own files and memory, and ret
     assert.equal(JSON.parse(read.content[0].text).text, "A real saved report");
     const foreign = await client.callTool({ name: "read_file", arguments: { id: "0".repeat(64) } });
     assert.equal(foreign.isError, true);
-    await client.callTool({ name: "save_memory", arguments: { text: "Cup design project" } });
-    const memory = await client.callTool({ name: "read_memory", arguments: {} });
-    assert.equal(JSON.parse(memory.content[0].text).text, "Cup design project");
+    for (const name of ["read_memory", "save_memory"]) {
+      const unavailable = await client.callTool({ name, arguments: {} });
+      assert.equal(unavailable.isError, true);
+    }
   } finally {
     await client.close();
     await stop();

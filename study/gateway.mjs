@@ -32,13 +32,8 @@ import {
   validModelSettings,
   conversationSettings,
 } from "./model-settings.mjs";
-import {
-  documentRecords,
-  documentFile,
-  persistDocumentUpload,
-  readStudentMemory,
-  writeStudentMemory,
-} from "./documents.mjs";
+import { documentRecords, documentFile } from "./documents.mjs";
+import { archiveNativeUpload } from "./native-uploads.mjs";
 import {
   archiveAssistantImages,
   generatedImageRecords,
@@ -482,7 +477,12 @@ export async function startGateway(config) {
     };
   }
   async function handleNativeCreation(student, request) {
-    const options = nativeCreation(request, student, await modelsFor(student));
+    const options = nativeCreation(
+      request,
+      student,
+      await modelsFor(student),
+      documentRecords(config, student),
+    );
     const fingerprint = createHash("sha256").update(JSON.stringify(options)).digest("hex");
     const prior = conversationRecords
       .get(student.id)
@@ -532,10 +532,22 @@ export async function startGateway(config) {
               text: options.initialPrompt,
               clientMessageId: options.clientMessageId,
               images,
+              attachments: options.attachments || [],
             },
-            documents: documentRecords(config, student).map(
-              ({ id, name, mimeType, bytes, kind }) => ({ id, name, mimeType, bytes, kind }),
-            ),
+            documents: documentRecords(config, student).map((document) => {
+              const result = {
+                id: document.id,
+                name: document.name,
+                mimeType: document.mimeType,
+                bytes: document.bytes,
+                kind: document.kind,
+              };
+              if (document.nativeUploadId) {
+                result.nativeUploadId = document.nativeUploadId;
+                result.nativePath = document.nativePath;
+              }
+              return result;
+            }),
             settings: {
               modelId: options.config.model,
               thinkingOptionId: options.config.thinkingOptionId,
@@ -571,6 +583,20 @@ export async function startGateway(config) {
     } finally {
       conversationCreationLocks.delete(student.id);
     }
+  }
+  async function recordNativeUpload(student, request, file) {
+    return archiveNativeUpload({
+      config,
+      student,
+      request,
+      file,
+      readFile: async (path, maxBytes) => {
+        const result = await clients
+          .get(student.id)
+          .readFile("/", path, `study-upload-${file.id}`, maxBytes);
+        return result.bytes;
+      },
+    });
   }
   async function handleLogin(request, response) {
     const input = await jsonBody(request);
@@ -697,53 +723,6 @@ export async function startGateway(config) {
       },
     ],
     [
-      "POST /study/files",
-      {
-        method: "POST",
-        run: async (request, response, { student }) => {
-          const input = await jsonBody(request, 12 * 1024 * 1024);
-          if (typeof input.name !== "string" || typeof input.data !== "string")
-            return reply(response, 400, { error: "Choose a supported document" });
-          const record = await persistDocumentUpload(config, student, {
-            name: input.name,
-            data: input.data,
-          });
-          return reply(response, 201, record);
-        },
-      },
-    ],
-    [
-      "GET /study/memory",
-      {
-        method: "GET",
-        run: async (_request, response, { student }) => {
-          return reply(response, 200, readStudentMemory(config, student));
-        },
-      },
-    ],
-    [
-      "POST /study/memory",
-      {
-        method: "POST",
-        run: async (request, response, { student }) => {
-          const input = await jsonBody(request, 12000);
-          if (typeof input.text !== "string" || Buffer.byteLength(input.text) > 8192)
-            return reply(response, 400, { error: "Memory must be 8 KiB or less" });
-          return reply(response, 200, writeStudentMemory(config, student, input.text));
-        },
-      },
-    ],
-    [
-      "DELETE /study/memory",
-      {
-        method: "DELETE",
-        run: async (_request, response, { student }) => {
-          writeStudentMemory(config, student, "");
-          return reply(response, 200, { ok: true });
-        },
-      },
-    ],
-    [
       "/study/records",
       {
         method: "GET",
@@ -789,17 +768,6 @@ export async function startGateway(config) {
             { mode: 0o600 },
           );
           return reply(response, 201, record);
-        },
-      },
-    ],
-    [
-      "/study/export",
-      {
-        method: "GET",
-        run: async (request, response, { student }) => {
-          return reply(response, 200, await exportStudent(student), {
-            "Content-Disposition": `attachment; filename="${student.id}-research.json"`,
-          });
         },
       },
     ],
@@ -1006,6 +974,7 @@ export async function startGateway(config) {
         session.student,
         pathname.slice("/study/output/".length),
       );
+    if (pathname === "/study/export") return reply(response, 404, { error: "Not found" });
     const student = session.student;
     const route =
       researchRoutes.get(`${request.method} ${pathname}`) || researchRoutes.get(pathname);
@@ -1030,6 +999,7 @@ export async function startGateway(config) {
     response.setHeader("Referrer-Policy", "same-origin");
     try {
       const pathname = new URL(request.url, "http://study.local").pathname;
+      if (pathname === "/study/memory") return reply(response, 404, { error: "Not found" });
       const publicData = new Map([
         ["/manifest.json", { name: "Lulu design study", start_url: "/", display: "standalone" }],
         ["/health", { ok: true, mode: config.mode }],
@@ -1057,6 +1027,7 @@ export async function startGateway(config) {
   installProxy({
     prepareConversation,
     handleStudentRequest,
+    recordNativeUpload,
     server,
     config,
     authenticate,

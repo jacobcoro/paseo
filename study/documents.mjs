@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   mkdirSync,
   readFileSync,
@@ -7,11 +7,10 @@ import {
   existsSync,
   realpathSync,
   lstatSync,
-  renameSync,
 } from "node:fs";
 import { join, resolve, basename, extname, dirname } from "node:path";
 
-export const DOCUMENT_LIMITS = { fileBytes: 8 * 1024 * 1024, studentBytes: 100 * 1024 * 1024 };
+export const DOCUMENT_LIMITS = { fileBytes: 10 * 1024 * 1024, studentBytes: 100 * 1024 * 1024 };
 const types = {
   ".pdf": "application/pdf",
   ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -26,6 +25,11 @@ const types = {
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
 };
+export function nativeDocumentMimeType(name) {
+  const extension = extname(name).toLowerCase();
+  if ([".png", ".jpg", ".jpeg", ".webp"].includes(extension)) return null;
+  return types[extension] || null;
+}
 export function studentWorkspace(config, student) {
   return student.workspacePath || join(dirname(config.recordsDir), student.id, "workspace");
 }
@@ -46,7 +50,7 @@ function validate(name, bytes, kind) {
   )
     throw Error("Use PDF, DOCX, XLSX, PPTX, TXT, MD, CSV or JSON files");
   if (!bytes.length || bytes.length > DOCUMENT_LIMITS.fileBytes)
-    throw Error("Each file must be under 8 MiB");
+    throw Error("Each file must be 10 MiB or less");
   if (extension === ".pdf" && !bytes.subarray(0, 5).equals(Buffer.from("%PDF-")))
     throw Error("Invalid PDF file");
   if (
@@ -77,9 +81,21 @@ export function registerDocument(config, student, name, bytes, kind = "upload", 
     .update(bytes)
     .digest("hex");
   const existing = previous.find((item) => item.id === id);
-  if (existing) return existing;
+  if (existing) {
+    if (!details.nativeUploadId) return existing;
+    const linkedRecord = { ...existing, ...details };
+    appendFileSync(
+      join(config.recordsDir, `${student.id}.documents.jsonl`),
+      JSON.stringify(linkedRecord) + "\n",
+      { mode: 0o600 },
+    );
+    return linkedRecord;
+  }
+  const storedBytes = new Map();
+  for (const record of previous)
+    storedBytes.set(record.id, Math.max(storedBytes.get(record.id) || 0, record.bytes));
   if (
-    previous.reduce((sum, record) => sum + record.bytes, 0) + bytes.length >
+    [...storedBytes.values()].reduce((sum, stored) => sum + stored, 0) + bytes.length >
     DOCUMENT_LIMITS.studentBytes
   )
     throw Error("Student file storage limit reached");
@@ -112,17 +128,6 @@ export function registerDocument(config, student, name, bytes, kind = "upload", 
   );
   return record;
 }
-export async function persistDocumentUpload(config, student, { name, data }) {
-  if (
-    typeof data !== "string" ||
-    data.length > Math.ceil(DOCUMENT_LIMITS.fileBytes / 3) * 4 ||
-    !/^[A-Za-z0-9+/]+={0,2}$/.test(data)
-  )
-    throw Error("Invalid or oversized file");
-  const bytes = Buffer.from(data, "base64");
-  if (bytes.toString("base64") !== data) throw Error("Invalid file encoding");
-  return registerDocument(config, student, name, bytes);
-}
 export function documentFile(config, student, id) {
   if (!/^[a-f0-9]{64}$/.test(id || "")) return null;
   const record = documentRecords(config, student).find((item) => item.id === id);
@@ -137,24 +142,4 @@ export function toolDirectories(config, student) {
   for (const sub of ["inbox", "results"])
     mkdirSync(join(root, sub), { recursive: true, mode: 0o700 });
   return { root, inbox: join(root, "inbox"), results: join(root, "results") };
-}
-export function readStudentMemory(config, student) {
-  const path = join(studentWorkspace(config, student), "study-files", "memory.json");
-  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : { text: "", updatedAt: null };
-}
-export function writeStudentMemory(config, student, text) {
-  if (typeof text !== "string" || Buffer.byteLength(text) > 8192)
-    throw Error("Memory must be under 8 KiB");
-  const path = join(studentWorkspace(config, student), "study-files", "memory.json");
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const value = { text, updatedAt: new Date().toISOString() };
-  const temporary = path + "." + randomUUID();
-  writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 });
-  renameSync(temporary, path);
-  appendFileSync(
-    join(config.recordsDir, `${student.id}.memory.jsonl`),
-    JSON.stringify(value) + "\n",
-    { mode: 0o600 },
-  );
-  return value;
 }

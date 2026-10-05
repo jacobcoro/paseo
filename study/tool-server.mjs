@@ -49,22 +49,6 @@ const tools = [
     },
   },
   {
-    name: "read_memory",
-    description:
-      "Read this student's saved preferences and project facts across their conversations.",
-    inputSchema: { type: "object", properties: {} },
-  },
-  {
-    name: "save_memory",
-    description:
-      "Save or replace this student's memory only when they ask to remember something or correct existing memory. Do not store passwords or other students' information. Pass the full updated memory text.",
-    inputSchema: {
-      type: "object",
-      properties: { text: { type: "string", maxLength: 8192 } },
-      required: ["text"],
-    },
-  },
-  {
     name: "read_skill",
     description:
       "Read the workflow for study-documents, study-analysis or study-research when that task benefits from specialized file/research handling.",
@@ -112,7 +96,7 @@ const server = new Server(
   {
     capabilities: { tools: {} },
     instructions:
-      "Use these tools for this student's uploaded documents, calculations, charts, generated downloads and saved memory. Read relevant study workflow with read_skill. All computations and files belong only to this student. Tools do not grant local shell, other accounts or desktop access.",
+      "Use these tools for this student's uploaded documents, calculations and generated downloads. Read relevant study workflow with read_skill. All computations and files belong only to this student. Tools do not grant local shell, other accounts or desktop access.",
   },
 );
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
