@@ -78,6 +78,17 @@ export function installProxy({
         }
         return true;
       }
+      async function archiveHandled(message) {
+        const entries = message.payload?.entries?.filter(
+          (entry) => entry.item?.type === "assistant_message",
+        );
+        if (entries?.length && onAssistantTimeline) {
+          const records = await onAssistantTimeline(session.student, entries);
+          for (const entry of entries)
+            entry.item.text = rewriteImages(entry.item.text, records || [], origin);
+        }
+        return filterStudentResponse(message);
+      }
       async function handle(raw, binary) {
         if (binary || !sessions.has(session.token) || session.expires < Date.now()) {
           browser.close(1008, "Session expired or unsupported message");
@@ -104,16 +115,8 @@ export function installProxy({
         try {
           const handled = await handleStudentRequest(session.student, allowed.message);
           if (handled) {
-            const entries = handled.payload?.entries?.filter(
-              (entry) => entry.item?.type === "assistant_message",
-            );
-            if (entries?.length && onAssistantTimeline) {
-              const records = await onAssistantTimeline(session.student, entries);
-              for (const entry of entries)
-                entry.item.text = rewriteImages(entry.item.text, records || [], origin);
-            }
             browser.send(
-              JSON.stringify({ type: "session", message: filterStudentResponse(handled) }),
+              JSON.stringify({ type: "session", message: await archiveHandled(handled) }),
             );
             return;
           }
