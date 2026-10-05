@@ -101,6 +101,7 @@ async function createProxy({ recordNativeUpload = async () => {} } = {}) {
   return {
     client,
     daemonMessages,
+    pairs,
     expireSession: () => sessions.delete(session.token),
     get daemonSocket() {
       return daemonSocket;
@@ -148,6 +149,96 @@ test("proxy forwards hello and ping without a nested message", async () => {
     assert.equal(ping.type, "ping");
     assert.equal(client.readyState, WebSocket.OPEN);
     client.close();
+  } finally {
+    await proxy.close();
+  }
+});
+
+test("proxy cleans an interrupted upload and accepts a fresh socket upload", async () => {
+  const archived = [];
+  const proxy = await createProxy({ recordNativeUpload: async (...args) => archived.push(args) });
+  const request = {
+    type: "session",
+    message: {
+      type: "file.upload.request",
+      requestId: "upload-request",
+      fileName: file.fileName,
+      mimeType: file.mimeType,
+      size: file.size,
+      modifiedAt: "2026-10-06T00:00:00.000Z",
+    },
+  };
+  const begin = () =>
+    encodeFileTransferFrame({
+      opcode: FileTransferOpcode.FileBegin,
+      requestId: "upload-request",
+      metadata: {
+        mime: file.mimeType,
+        size: file.size,
+        encoding: "binary",
+        modifiedAt: request.message.modifiedAt,
+        fileName: file.fileName,
+      },
+    });
+  const handshake = async (client) => {
+    await wait(client, "open");
+    const ack = wait(client, "message", (raw) => JSON.parse(raw.toString()).type === "hello.ack");
+    client.send(JSON.stringify({ type: "hello", clientType: "browser" }));
+    await ack;
+  };
+  try {
+    const first = proxy.client();
+    await handshake(first);
+    const upstream = proxy.daemonSocket;
+    first.send(JSON.stringify(request));
+    first.send(begin());
+    first.send(
+      encodeFileTransferFrame({
+        opcode: FileTransferOpcode.FileChunk,
+        requestId: "upload-request",
+        payload: Buffer.from("he"),
+      }),
+    );
+    const received = wait(
+      upstream,
+      "message",
+      (raw, binary) => binary && new Uint8Array(raw)[0] === FileTransferOpcode.FileChunk,
+    );
+    await received;
+    const upstreamClosed = wait(upstream, "close");
+    const firstClosed = wait(first, "close");
+    first.close();
+    await Promise.all([upstreamClosed, firstClosed]);
+    assert.equal(proxy.pairs.size, 0);
+    assert.equal(archived.length, 0);
+
+    const second = proxy.client();
+    await handshake(second);
+    assert.notEqual(proxy.daemonSocket, upstream);
+    const response = wait(
+      second,
+      "message",
+      (raw) => JSON.parse(raw.toString()).message?.type === "file.upload.response",
+    );
+    second.send(JSON.stringify(request));
+    second.send(begin());
+    second.send(
+      encodeFileTransferFrame({
+        opcode: FileTransferOpcode.FileChunk,
+        requestId: "upload-request",
+        payload: Buffer.from("hello"),
+      }),
+    );
+    second.send(
+      encodeFileTransferFrame({
+        opcode: FileTransferOpcode.FileEnd,
+        requestId: "upload-request",
+      }),
+    );
+    const [raw] = await response;
+    assert.deepEqual(JSON.parse(raw.toString()).message.payload.file, file);
+    assert.equal(archived.length, 1);
+    second.close();
   } finally {
     await proxy.close();
   }
