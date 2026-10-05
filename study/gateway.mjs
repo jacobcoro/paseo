@@ -147,9 +147,11 @@ export async function startGateway(config) {
   }
   async function prepareConversationUnlocked(student, agentId) {
     const previous = activeConversations.get(student.id);
-    if (previous && previous !== agentId) {
-      await transcript(student);
-      if (!(await releaseIdleRuntime(student, previous)))
+    if (previous && previous !== agentId) await transcript(student);
+    // Native tab observers can reopen idle histories. Release every owned idle
+    // runtime before loading a chat, rather than only the last selected one.
+    for (const id of new Set([student.agentId, ...student.ownedConversationIds])) {
+      if (id !== agentId && !(await releaseIdleRuntime(student, id)))
         throw Error("Wait for the current reply before changing chats");
     }
     if (agentId !== "new") {
