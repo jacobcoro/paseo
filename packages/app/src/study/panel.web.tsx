@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useReducer, useState, type Dispatch } from "react";
 import { useRouter, usePathname, useLocalSearchParams } from "expo-router";
+import { useTranslation } from "react-i18next";
+import { useAppSettings } from "@/hooks/use-settings";
+import { studyLabel } from "./language";
 import { useSessionStore } from "@/stores/session-store";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { Text, View } from "react-native";
@@ -111,9 +114,14 @@ interface StudySelectProps {
   dispatch: Dispatch<ResearchAction>;
 }
 function StudySelect({ name, label, value, options, dispatch }: StudySelectProps) {
+  const { i18n } = useTranslation();
+  const translatedOptions = useMemo(
+    () => options.map((option) => ({ ...option, label: studyLabel(option.label, i18n.language) })),
+    [options, i18n.language],
+  );
   const display = useMemo(
-    () => options.find((item) => item.value === value) || null,
-    [options, value],
+    () => translatedOptions.find((item) => item.value === value) || null,
+    [translatedOptions, value],
   );
   const change = useCallback(
     (next: string) => dispatch({ type: "change", patch: { [name]: next } }),
@@ -121,12 +129,12 @@ function StudySelect({ name, label, value, options, dispatch }: StudySelectProps
   );
   return (
     <SelectField
-      label={label}
+      label={studyLabel(label)}
       value={value}
       selectedDisplay={display}
-      options={options}
-      placeholder="选择 / Select"
-      emptyText="暂无记录 / No records"
+      options={translatedOptions}
+      placeholder={studyLabel("选择 / Select")}
+      emptyText={studyLabel("暂无记录 / No records")}
       onChange={change}
       searchable
       size="sm"
@@ -139,9 +147,9 @@ function StudyTextField({ name, label, value, dispatch }: Omit<StudySelectProps,
     [name, dispatch],
   );
   return (
-    <Field label={label}>
+    <Field label={studyLabel(label)}>
       <FormTextInput
-        accessibilityLabel={label}
+        accessibilityLabel={studyLabel(label)}
         initialValue={value}
         onChangeText={change}
         multiline
@@ -151,6 +159,11 @@ function StudyTextField({ name, label, value, dispatch }: Omit<StudySelectProps,
   );
 }
 function ResearchSheet({ close }: { close: () => void }) {
+  const { i18n } = useTranslation();
+  const header = useMemo(
+    () => ({ title: studyLabel(SHEET_HEADER.title, i18n.language) }),
+    [i18n.language],
+  );
   const [state, dispatch] = useReducer(reduceForm, { form: DEFAULT_FORM, saved: false });
   const queryClient = useQueryClient();
   const records = useFetchQuery({
@@ -195,18 +208,18 @@ function ResearchSheet({ close }: { close: () => void }) {
   ] as const;
   const submit = useCallback(() => save.mutate(), [save]);
   return (
-    <AdaptiveModalSheet visible header={SHEET_HEADER} onClose={close} desktopMaxWidth={600}>
+    <AdaptiveModalSheet visible header={header} onClose={close} desktopMaxWidth={600}>
       <View style={styles.form}>
         <StudySelect
           name="promptId"
-          label="记录对应的提示词 / Prompt"
+          label={studyLabel("记录对应的提示词 / Prompt")}
           value={state.form.promptId}
           options={prompts}
           dispatch={dispatch}
         />
         <StudySelect
           name="phase"
-          label="设计阶段 / Phase"
+          label={studyLabel("设计阶段 / Phase")}
           value={state.form.phase}
           options={phases}
           dispatch={dispatch}
@@ -215,33 +228,35 @@ function ResearchSheet({ close }: { close: () => void }) {
           <StudyTextField
             key={key}
             name={key}
-            label={label}
+            label={studyLabel(label)}
             value={state.form[key]}
             dispatch={dispatch}
           />
         ))}
         <StudySelect
           name="modified"
-          label="是否修改 AI 结果 / Modified?"
+          label={studyLabel("是否修改 AI 结果 / Modified?")}
           value={state.form.modified}
           options={modified}
           dispatch={dispatch}
         />
         <StudySelect
           name="adoption"
-          label="最终是否采用 / Adoption"
+          label={studyLabel("最终是否采用 / Adoption")}
           value={state.form.adoption}
           options={adoption}
           dispatch={dispatch}
         />
-        {records.isError && <Text style={styles.error}>{records.error.message}</Text>}
-        {save.isError && <Text style={styles.error}>{save.error.message}</Text>}
-        {state.saved && <Text style={styles.text}>已保存 / Saved</Text>}
+        {records.isError && (
+          <Text style={styles.error}>{studyLabel(records.error.message || "")}</Text>
+        )}
+        {save.isError && <Text style={styles.error}>{studyLabel(save.error.message || "")}</Text>}
+        {state.saved && <Text style={styles.text}>{studyLabel("已保存 / Saved")}</Text>}
         <Text style={styles.muted}>
-          {records.data?.annotations.length || 0} 条记录已保存 / records saved
+          {records.data?.annotations.length || 0} {studyLabel("条记录已保存 / records saved")}
         </Text>
         <Button onPress={submit} loading={save.isPending}>
-          保存记录 / Save record
+          {studyLabel("保存记录 / Save record")}
         </Button>
       </View>
     </AdaptiveModalSheet>
@@ -250,7 +265,31 @@ function ResearchSheet({ close }: { close: () => void }) {
 
 type StudyStudent = z.infer<typeof Student>;
 
+function LanguageToggle() {
+  const { i18n } = useTranslation();
+  const { updateSettings } = useAppSettings();
+  const change = useMutation({
+    mutationFn: async () => {
+      const language = i18n.language === "en" ? "zh-CN" : "en";
+      localStorage.setItem("study.language", language);
+      await updateSettings({ language });
+    },
+  });
+  const toggle = useCallback(() => change.mutate(), [change]);
+  return (
+    <>
+      <Button size="sm" variant="ghost" onPress={toggle} loading={change.isPending}>
+        {i18n.language === "en" ? "中文" : "English"}
+      </Button>
+      {change.isError && (
+        <Text style={styles.error}>{studyLabel("Could not change language")}</Text>
+      )}
+    </>
+  );
+}
+
 export function StudyPanel() {
+  useTranslation();
   const [open, setOpen] = useState(false);
   const student = useFetchQuery({
     dataShape: "value",
@@ -294,22 +333,23 @@ export function StudyPanel() {
       <View style={styles.banner}>
         <View style={styles.identity}>
           <Text style={styles.text}>Lulu · {student.data.studentId}</Text>
-          <Text style={styles.muted}>{modeLabel}</Text>
+          <Text style={styles.muted}>{studyLabel(modeLabel)}</Text>
           <Text style={styles.muted}>
-            图片 / Images: PNG, JPEG, WebP · 4 / prompt · 2 MiB / image
+            {studyLabel("图片 / Images: PNG, JPEG, WebP · 4 / prompt · 2 MiB / image")}
           </Text>
         </View>
+        <LanguageToggle />
         <Button size="sm" onPress={openSheet}>
-          研究记录 / Record
+          {studyLabel("研究记录 / Record")}
         </Button>
         <Button size="sm" variant="ghost" onPress={exportRecords}>
-          导出 / Export
+          {studyLabel("导出 / Export")}
         </Button>
         <Button size="sm" variant="ghost" loading={logout.isPending} onPress={signOut}>
-          退出 / Sign out
+          {studyLabel("退出 / Sign out")}
         </Button>
       </View>
-      {logout.isError && <Text style={styles.error}>{logout.error.message}</Text>}
+      {logout.isError && <Text style={styles.error}>{studyLabel(logout.error.message || "")}</Text>}
       <StudyTools student={student.data} />
       {open && <ResearchSheet close={closeSheet} />}
     </>
@@ -321,6 +361,7 @@ interface StudyToolsProps {
 }
 
 function StudyTools({ student }: StudyToolsProps) {
+  const { i18n } = useTranslation();
   const [selectedAgentId, setSelectedAgentId] = useState(student.agentId);
   const [voiceNotice, setVoiceNotice] = useState("");
   const router = useRouter();
@@ -351,9 +392,9 @@ function StudyTools({ student }: StudyToolsProps) {
         id: conversation.agentId,
         value: conversation.agentId,
         label: conversation.title,
-        description: conversation.readonly ? "Read only" : undefined,
+        description: conversation.readonly ? studyLabel("Read only", i18n.language) : undefined,
       })),
-    [conversations.data],
+    [conversations.data, i18n.language],
   );
   const selected = useMemo(
     () => options.find((item) => item.value === selectedAgentId) || options[0] || null,
@@ -400,40 +441,43 @@ function StudyTools({ student }: StudyToolsProps) {
     <>
       <View style={styles.tools}>
         <SelectField
-          label="Chat / 对话"
+          label={studyLabel("Chat / 对话")}
           value={selected?.value || null}
           selectedDisplay={selectedDisplay}
           options={options}
           onChange={switchConversation}
-          placeholder="Choose chat"
-          emptyText="No chats"
+          placeholder={studyLabel("Choose chat")}
+          emptyText={studyLabel("No chats")}
           searchable
           size="sm"
           disabled={!options.length}
         />
         <Button size="sm" onPress={createNewChat} loading={create.isPending}>
-          New chat
+          {studyLabel("New chat")}
         </Button>
         {student.mode === "live" &&
           conversations.data?.conversations.some(
             (item) => item.agentId === selectedAgentId && !item.readonly,
           ) && <ModelControls key={selectedAgentId} agentId={selectedAgentId} />}
-        {create.isError && <Text style={styles.error}>{create.error.message}</Text>}
+        {create.isError && (
+          <Text style={styles.error}>{studyLabel(create.error.message || "")}</Text>
+        )}
         <DocumentControls setNotice={setVoiceNotice} />
         <Button size="sm" variant="ghost" onPress={dictateCurrent}>
-          Dictate
+          {studyLabel("Dictate")}
         </Button>
         <Button size="sm" variant="ghost" onPress={readCurrent}>
-          Read latest reply
+          {studyLabel("Read latest reply")}
         </Button>
         <MemoryControls />
       </View>
-      {!!voiceNotice && <Text style={styles.muted}>{voiceNotice}</Text>}
+      {!!voiceNotice && <Text style={styles.muted}>{studyLabel(voiceNotice)}</Text>}
     </>
   );
 }
 
 function ModelControls({ agentId }: { agentId: string }) {
+  const { i18n } = useTranslation();
   const queryClient = useQueryClient();
   const queryKey = useMemo(() => ["study-model-settings", agentId], [agentId]);
   const settings = useFetchQuery({
@@ -473,9 +517,9 @@ function ModelControls({ agentId }: { agentId: string }) {
       (model?.thinkingOptions || []).map((item) => ({
         id: item.id,
         value: item.id,
-        label: item.label,
+        label: studyLabel(item.label, i18n.language),
       })),
-    [model],
+    [model, i18n.language],
   );
   const chooseModel = useCallback(
     (modelId: string) => {
@@ -503,29 +547,33 @@ function ModelControls({ agentId }: { agentId: string }) {
   return (
     <>
       <SelectField
-        label="模型 / Model"
+        label={studyLabel("模型 / Model")}
         size="sm"
         value={settings.data?.modelId || null}
         selectedDisplay={modelDisplay}
         options={models}
         onChange={chooseModel}
         disabled={change.isPending || !models.length}
-        placeholder="Loading models"
+        placeholder={studyLabel("Loading models")}
+        emptyText={studyLabel("No models available")}
         searchable
       />
       <SelectField
-        label="推理 / Reasoning"
+        label={studyLabel("推理 / Reasoning")}
         size="sm"
         value={settings.data?.thinkingOptionId || null}
         selectedDisplay={reasoningDisplay}
         options={levels}
         onChange={chooseReasoning}
         disabled={change.isPending || !levels.length}
-        placeholder="Reasoning"
+        placeholder={studyLabel("Reasoning")}
+        emptyText={studyLabel("No reasoning options available")}
       />
-      {change.isPending && <Text style={styles.muted}>Saving settings…</Text>}
+      {change.isPending && <Text style={styles.muted}>{studyLabel("Saving settings…")}</Text>}
       {(settings.isError || change.isError) && (
-        <Text style={styles.error}>{change.error?.message || settings.error?.message}</Text>
+        <Text style={styles.error}>
+          {studyLabel(change.error?.message || settings.error?.message || "")}
+        </Text>
       )}
     </>
   );
@@ -564,7 +612,7 @@ function DocumentControls({ setNotice }: { setNotice: (message: string) => void 
         void (async () => {
           for (const file of Array.from(input.files || [])) {
             if (file.size > 8 * 1024 * 1024) {
-              setNotice(`${file.name}: file is over 8 MiB`);
+              setNotice(`${file.name}: ${studyLabel("File is over 8 MiB")}`);
               continue;
             }
             const bytes = new Uint8Array(await file.arrayBuffer());
@@ -591,13 +639,13 @@ function DocumentControls({ setNotice }: { setNotice: (message: string) => void 
   return (
     <>
       <Button size="sm" variant="ghost" onPress={pick} loading={upload.isPending}>
-        Upload documents
+        {studyLabel("Upload documents")}
       </Button>
       {files.data?.files.map((file) => (
         <DocumentDownloadButton key={file.id} file={file} onDownload={download} />
       ))}
-      {upload.isError && <Text style={styles.error}>{uploadError}</Text>}
-      {files.isError && <Text style={styles.error}>{files.error.message}</Text>}
+      {upload.isError && <Text style={styles.error}>{studyLabel(uploadError || "")}</Text>}
+      {files.isError && <Text style={styles.error}>{studyLabel(files.error.message || "")}</Text>}
     </>
   );
 }
@@ -612,7 +660,7 @@ function DocumentDownloadButton({
   const download = useCallback(() => onDownload(file.id), [file.id, onDownload]);
   return (
     <Button size="sm" variant="ghost" onPress={download}>
-      {file.name} · Download
+      {file.name} · {studyLabel("Download")}
     </Button>
   );
 }
@@ -661,12 +709,12 @@ function MemoryControls() {
   return (
     <>
       <Button size="sm" variant="ghost" onPress={toggle}>
-        {open ? "Hide memory" : "Memory"}
+        {studyLabel(open ? "Hide memory" : "Memory")}
       </Button>
       {open && (
         <View style={styles.memory}>
           <Text style={styles.muted}>
-            Your notes for future chats. Keep private details out. Max 8 KiB.
+            {studyLabel("Your notes for future chats. Keep private details out. Max 8 KiB.")}
           </Text>
           <EditingTextInput
             key={memory.data?.updatedAt || "loading"}
@@ -674,19 +722,21 @@ function MemoryControls() {
             initialValue={memory.data?.text || ""}
             onChangeText={setText}
             style={styles.memoryInput}
-            accessibilityLabel="Study memory"
+            accessibilityLabel={studyLabel("Study memory")}
           />
           <View style={styles.memoryActions}>
             <Button size="sm" onPress={saveMemory} loading={save.isPending}>
-              Save memory
+              {studyLabel("Save memory")}
             </Button>
             <Button size="sm" variant="ghost" onPress={clearMemory} loading={clear.isPending}>
-              Clear
+              {studyLabel("Clear")}
             </Button>
           </View>
           {(memory.isError || save.isError || clear.isError) && (
             <Text style={styles.error}>
-              {memory.error?.message || save.error?.message || clear.error?.message}
+              {studyLabel(
+                memory.error?.message || save.error?.message || clear.error?.message || "",
+              )}
             </Text>
           )}
         </View>
@@ -728,7 +778,7 @@ function dictate(setNotice: (message: string) => void) {
     return;
   }
   const recognition = new Recognition();
-  recognition.lang = navigator.language || "zh-CN";
+  recognition.lang = localStorage.getItem("study.language") === "en" ? "en-US" : "zh-CN";
   recognition.interimResults = false;
   recognition.maxAlternatives = 1;
   recognition.addEventListener(

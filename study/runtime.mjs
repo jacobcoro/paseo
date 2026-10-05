@@ -1,3 +1,4 @@
+import { assignStudentAccount } from "./account-pool.mjs";
 import { ensureAdmin } from "./admin-account.mjs";
 import { once } from "node:events";
 import { execFileSync } from "node:child_process";
@@ -68,9 +69,24 @@ try {
     const name = `lulu-study-${randomBytes(4).toString("hex")}-${id}`;
     const liveMounts = [];
     if (mode === "live") {
-      if (!process.env.STUDY_CODEX_BINARY || !process.env.STUDY_CODEX_AUTH)
+      if (
+        !process.env.STUDY_CODEX_BINARY ||
+        !(process.env.STUDY_CODEX_AUTH || process.env.STUDY_ACCOUNT_POOL)
+      )
         throw new Error("Live smoke requires STUDY_CODEX_BINARY and STUDY_CODEX_AUTH paths");
-      copyFileSync(process.env.STUDY_CODEX_AUTH, join(codexHome, "auth.json"));
+      const account = process.env.STUDY_ACCOUNT_POOL
+        ? assignStudentAccount(process.env.STUDY_ACCOUNT_POOL, id)
+        : null;
+      copyFileSync(
+        account ? account.authFile : process.env.STUDY_CODEX_AUTH,
+        join(codexHome, "auth.json"),
+      );
+      if (account)
+        writeFileSync(
+          join(studentRoot, "account-route.json"),
+          JSON.stringify({ account: account.id }),
+          { mode: 0o600 },
+        );
       writeFileSync(
         join(codexHome, "config.toml"),
         studyCodexConfig({ publicUrl: process.env.STUDY_PUBLIC_URL || "" }),
