@@ -13,14 +13,7 @@ import {
 } from "node:fs";
 import { join, basename } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
-import {
-  documentRecords,
-  documentFile,
-  registerDocument,
-  toolDirectories,
-  readStudentMemory,
-  writeStudentMemory,
-} from "./documents.mjs";
+import { documentRecords, documentFile, registerDocument, toolDirectories } from "./documents.mjs";
 
 const run = promisify(execFile);
 async function cleanupOwnedCompute(config) {
@@ -168,8 +161,6 @@ export async function runPythonJob(config, student, request) {
 export async function handleTool(config, student, request) {
   if (request.operation === "list_files") return documentRecords(config, student);
   if (request.operation === "run_python") return runPythonJob(config, student, request);
-  if (request.operation === "read_memory") return readStudentMemory(config, student);
-  if (request.operation === "save_memory") return writeStudentMemory(config, student, request.text);
   if (request.operation === "write_text")
     return registerDocument(
       config,

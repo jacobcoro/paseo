@@ -5,8 +5,17 @@ import { studentMessage } from "./policy.mjs";
 import { persistImages } from "./images.mjs";
 import { rewriteGeneratedImageMarkdown } from "./outputs.mjs";
 import { filterStudentResponse } from "./native-controls.mjs";
-import { documentRecords } from "./documents.mjs";
-import { createNativeUploadTracker } from "./native-uploads.mjs";
+import { documentRecords, DOCUMENT_LIMITS } from "./documents.mjs";
+import { createNativeUploadTracker, NATIVE_UPLOAD_LIMITS } from "./native-uploads.mjs";
+
+const MAX_CONTROL_FRAME_BYTES = 12 * 1024 * 1024;
+const MAX_QUEUED_INPUT_BYTES = 16 * 1024 * 1024;
+// Four active 10 MiB transfers define the largest valid upload backlog.
+const MAX_PENDING_DATA_BYTES = 40 * 1024 * 1024;
+const MAX_QUEUED_CONTROL_FRAMES = 100;
+const MAX_QUEUED_BINARY_FRAMES =
+  NATIVE_UPLOAD_LIMITS.active *
+  (Math.ceil(DOCUMENT_LIMITS.fileBytes / NATIVE_UPLOAD_LIMITS.chunkBytes) + 2);
 
 function rewriteImages(text, records, origin) {
   return rewriteGeneratedImageMarkdown(text, records, origin + "/study/output/");
@@ -29,26 +38,50 @@ function deny(browser, message, error) {
   );
 }
 
-function relayNativeUploadFrame({ raw, browser, upstream, pending, tracker }) {
+function sendUpstream(data, binary, browser, upstream, pending, pendingState) {
+  const size = typeof data === "string" ? Buffer.byteLength(data) : data.length;
+  if (upstream.readyState === WebSocket.OPEN) {
+    if (upstream.bufferedAmount + size > MAX_PENDING_DATA_BYTES) {
+      browser.close(1013, "Upload queue is full; reconnect");
+      return;
+    }
+    upstream.send(data, { binary });
+    return;
+  }
+  if (
+    upstream.readyState === WebSocket.CONNECTING &&
+    pendingState.bytes + size <= MAX_PENDING_DATA_BYTES
+  ) {
+    pending.push({ data, binary });
+    pendingState.bytes += size;
+    return;
+  }
+  browser.close(1013, "Try reconnecting");
+}
+
+function relayNativeUploadFrame({ raw, browser, upstream, pending, tracker, pendingState }) {
   try {
     tracker.receive(raw);
   } catch {
     browser.close(1008, "Unregistered or invalid file transfer");
     return;
   }
-  if (upstream.readyState === WebSocket.OPEN) upstream.send(raw, { binary: true });
-  else if (upstream.readyState === WebSocket.CONNECTING && pending.length < 100)
-    pending.push({ data: raw, binary: true });
-  else browser.close(1013, "Try reconnecting");
+  sendUpstream(raw, true, browser, upstream, pending, pendingState);
 }
 
 async function archiveUploadResponse({ message, browser, student, tracker, recordNativeUpload }) {
   if (message?.type !== "file.upload.response") return false;
   const requestId = message.payload?.requestId;
+  if (message.payload?.error) {
+    tracker.cancel(requestId);
+    return false;
+  }
   try {
     const upload = tracker.complete(requestId, message.payload?.file);
-    if (upload.file && !message.payload?.error)
-      await recordNativeUpload(student, upload.request, upload.file);
+    if (!upload.file) throw new Error("The uploaded file was not returned by the daemon");
+    if (typeof recordNativeUpload !== "function")
+      throw new Error("The uploaded file could not be archived");
+    await recordNativeUpload(student, upload.request, upload.file);
     return false;
   } catch (error) {
     tracker.cancel(requestId);
@@ -57,6 +90,8 @@ async function archiveUploadResponse({ message, browser, student, tracker, recor
       { requestId, type: "file.upload.request" },
       error.message || "Could not archive the uploaded file",
     );
+    if (typeof requestId !== "string" || !requestId)
+      browser.close(1011, "Uploaded file archival failed");
     return true;
   }
 }
@@ -82,7 +117,10 @@ export function installProxy({
   handleStudentRequest,
   recordNativeUpload,
 }) {
-  const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 12 * 1024 * 1024 });
+  const websocketServer = new WebSocketServer({
+    noServer: true,
+    maxPayload: MAX_CONTROL_FRAME_BYTES,
+  });
   server.on("upgrade", (request, socket, head) => {
     const session = authenticate(request);
     const owned = [...socketPairs].filter((pair) => pair.studentId === session?.studentId).length;
@@ -97,11 +135,22 @@ export function installProxy({
       const pair = { browser, upstream, token: session.token, studentId: session.studentId };
       socketPairs.add(pair);
       const pending = [];
-      const nativeUploads = createNativeUploadTracker();
+      const pendingState = { bytes: 0 };
+      const nativeUploads = createNativeUploadTracker({
+        onExpire: (upload) => {
+          deny(
+            browser,
+            { requestId: upload.requestId, type: upload.type },
+            "File upload timed out",
+          );
+          browser.close(1008, "File upload timed out");
+        },
+      });
       let chain = Promise.resolve();
       upstream.on("open", () => {
         for (const frame of pending) upstream.send(frame.data, { binary: frame.binary });
         pending.length = 0;
+        pendingState.bytes = 0;
       });
       async function prepare(allowed) {
         if (
@@ -133,7 +182,7 @@ export function installProxy({
         return filterStudentResponse(message);
       }
       async function prepareAllowedMessage(allowed) {
-        if (allowed.message.type === "file.upload.request") {
+        if (allowed.message?.type === "file.upload.request") {
           try {
             nativeUploads.begin(allowed.message);
           } catch (error) {
@@ -194,15 +243,7 @@ export function installProxy({
         );
         return true;
       }
-      async function handle(raw, binary) {
-        if (!sessions.has(session.token) || session.expires < Date.now()) {
-          browser.close(1008, "Session expired");
-          return;
-        }
-        if (binary) {
-          relayNativeUploadFrame({ raw, browser, upstream, pending, tracker: nativeUploads });
-          return;
-        }
+      async function handleText(raw) {
         const original = JSON.parse(raw.toString());
         const allowed = studentMessage(
           original,
@@ -228,38 +269,68 @@ export function installProxy({
         if (!(await prepareAllowedMessage(allowed))) return;
         if (
           allowed.type === "session" &&
-          allowed.message.type === "send_agent_message_request" &&
+          allowed.message?.type === "send_agent_message_request" &&
           !(await recordPrompt(allowed))
         )
           return;
         if (allowed.message?.type === "get_providers_snapshot_request")
           delete allowed.message.ifNoneMatch;
-        const frame = JSON.stringify(allowed);
-        if (upstream.readyState === WebSocket.OPEN) upstream.send(frame, { binary: false });
-        else if (upstream.readyState === WebSocket.CONNECTING && pending.length < 100)
-          pending.push({ data: frame, binary: false });
-        else browser.close(1013, "Try reconnecting");
+        sendUpstream(JSON.stringify(allowed), false, browser, upstream, pending, pendingState);
+      }
+      async function handle(raw, binary) {
+        if (!sessions.has(session.token) || session.expires < Date.now()) {
+          browser.close(1008, "Session expired");
+          return;
+        }
+        if (binary)
+          return relayNativeUploadFrame({
+            raw,
+            browser,
+            upstream,
+            pending,
+            tracker: nativeUploads,
+            pendingState,
+          });
+        await handleText(raw);
       }
       let queued = 0;
+      let queuedInputBytes = 0;
+      let queuedBinaryFrames = 0;
       function invalid() {
         browser.close(1008, "Invalid request");
       }
       function dequeue() {
         queued--;
       }
+      function finishInput(binary, size) {
+        return () => {
+          queuedInputBytes -= size;
+          if (binary) queuedBinaryFrames--;
+          else dequeue();
+        };
+      }
       browser.on("message", (raw, binary) => {
-        if (!limits.allow("frames:" + session.studentId, 120, 10000)) {
+        if (!binary && !limits.allow("frames:" + session.studentId, 120, 10000)) {
           browser.close(1008, "Too many requests");
           return;
         }
-        if (++queued > 100) {
-          browser.close(1008, "Too many pending messages");
+        if (
+          raw.length > (binary ? NATIVE_UPLOAD_LIMITS.frameBytes : MAX_CONTROL_FRAME_BYTES) ||
+          (binary
+            ? queuedBinaryFrames >= MAX_QUEUED_BINARY_FRAMES
+            : queued >= MAX_QUEUED_CONTROL_FRAMES) ||
+          queuedInputBytes + raw.length > MAX_QUEUED_INPUT_BYTES
+        ) {
+          browser.close(1008, "Too much pending data");
           return;
         }
+        if (binary) queuedBinaryFrames++;
+        else queued++;
+        queuedInputBytes += raw.length;
         chain = chain
           .then(handle.bind(null, raw, binary))
           .catch(invalid)
-          .finally(dequeue);
+          .finally(finishInput(binary, raw.length));
       });
       const origin = `${request.headers["x-forwarded-proto"] === "https" ? "https" : "http"}://${request.headers.host}`;
       let outputChain = Promise.resolve();
@@ -304,7 +375,16 @@ export function installProxy({
           try {
             await forwardEnvelope(raw);
             return;
-          } catch {}
+          } catch {
+            try {
+              const envelope = JSON.parse(raw.toString());
+              const message = envelope.type === "session" ? envelope.message : envelope;
+              if (message?.type === "file.upload.response") {
+                browser.close(1011, "Uploaded file archival failed");
+                return;
+              }
+            } catch {}
+          }
         }
         if (browser.readyState === WebSocket.OPEN) browser.send(raw, { binary });
       }
@@ -326,6 +406,9 @@ export function installProxy({
       browser.on("error", () => upstream.close());
       upstream.on("close", () => browser.close());
       browser.on("close", () => {
+        nativeUploads.cancelAll();
+        pending.length = 0;
+        pendingState.bytes = 0;
         upstream.close();
         socketPairs.delete(pair);
       });

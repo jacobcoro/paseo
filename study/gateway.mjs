@@ -32,13 +32,7 @@ import {
   validModelSettings,
   conversationSettings,
 } from "./model-settings.mjs";
-import {
-  documentRecords,
-  documentFile,
-  persistDocumentUpload,
-  readStudentMemory,
-  writeStudentMemory,
-} from "./documents.mjs";
+import { documentRecords, documentFile } from "./documents.mjs";
 import { archiveNativeUpload } from "./native-uploads.mjs";
 import {
   archiveAssistantImages,
@@ -729,53 +723,6 @@ export async function startGateway(config) {
       },
     ],
     [
-      "POST /study/files",
-      {
-        method: "POST",
-        run: async (request, response, { student }) => {
-          const input = await jsonBody(request, 12 * 1024 * 1024);
-          if (typeof input.name !== "string" || typeof input.data !== "string")
-            return reply(response, 400, { error: "Choose a supported document" });
-          const record = await persistDocumentUpload(config, student, {
-            name: input.name,
-            data: input.data,
-          });
-          return reply(response, 201, record);
-        },
-      },
-    ],
-    [
-      "GET /study/memory",
-      {
-        method: "GET",
-        run: async (_request, response, { student }) => {
-          return reply(response, 200, readStudentMemory(config, student));
-        },
-      },
-    ],
-    [
-      "POST /study/memory",
-      {
-        method: "POST",
-        run: async (request, response, { student }) => {
-          const input = await jsonBody(request, 12000);
-          if (typeof input.text !== "string" || Buffer.byteLength(input.text) > 8192)
-            return reply(response, 400, { error: "Memory must be 8 KiB or less" });
-          return reply(response, 200, writeStudentMemory(config, student, input.text));
-        },
-      },
-    ],
-    [
-      "DELETE /study/memory",
-      {
-        method: "DELETE",
-        run: async (_request, response, { student }) => {
-          writeStudentMemory(config, student, "");
-          return reply(response, 200, { ok: true });
-        },
-      },
-    ],
-    [
       "/study/records",
       {
         method: "GET",
@@ -1052,6 +999,7 @@ export async function startGateway(config) {
     response.setHeader("Referrer-Policy", "same-origin");
     try {
       const pathname = new URL(request.url, "http://study.local").pathname;
+      if (pathname === "/study/memory") return reply(response, 404, { error: "Not found" });
       const publicData = new Map([
         ["/manifest.json", { name: "Lulu design study", start_url: "/", display: "standalone" }],
         ["/health", { ok: true, mode: config.mode }],

@@ -8,6 +8,12 @@ import { DOCUMENT_LIMITS, nativeDocumentMimeType, registerDocument } from "./doc
 // The student image sets PASEO_HOME to /home/node/.paseo.
 const UPLOAD_ROOT = "/home/node/.paseo/uploads";
 const SENSITIVE_NAME = /(^|[._-])(auth|credentials?|secret|token|private)([._-]|$)/i;
+export const NATIVE_UPLOAD_LIMITS = {
+  active: 4,
+  chunkBytes: 128 * 1024,
+  frameBytes: 128 * 1024 + 512,
+  timeoutMs: 120000,
+};
 
 function safeDocumentName(name) {
   return (
@@ -94,14 +100,29 @@ export async function archiveNativeUpload({ config, student, request, file, read
   });
 }
 
-export function createNativeUploadTracker() {
+export function createNativeUploadTracker({
+  maxActive = NATIVE_UPLOAD_LIMITS.active,
+  maxChunkBytes = NATIVE_UPLOAD_LIMITS.chunkBytes,
+  timeoutMs = NATIVE_UPLOAD_LIMITS.timeoutMs,
+  onExpire = () => {},
+} = {}) {
   const pending = new Map();
   function begin(request) {
     if (!validateNativeUploadRequest(request)) throw new Error("Unsupported or oversized file");
     if (pending.has(request.requestId)) throw new Error("File upload is already active");
-    pending.set(request.requestId, { request, started: false, ended: false, received: 0 });
+    if (pending.size >= maxActive) throw new Error("Too many active file uploads");
+    const state = { request, started: false, ended: false, received: 0, chunks: 0 };
+    state.timer = setTimeout(() => {
+      if (pending.get(request.requestId) !== state) return;
+      pending.delete(request.requestId);
+      onExpire(request);
+    }, timeoutMs);
+    state.timer.unref?.();
+    pending.set(request.requestId, state);
   }
   function receive(bytes) {
+    if (bytes.byteLength > NATIVE_UPLOAD_LIMITS.frameBytes)
+      throw new Error("File transfer frame is oversized");
     const frame = decodeFileTransferFrame(bytes);
     const state = frame && pending.get(frame.requestId);
     if (!frame || !state || state.ended) throw new Error("Unregistered file transfer frame");
@@ -120,6 +141,11 @@ export function createNativeUploadTracker() {
     }
     if (!state.started) throw new Error("File transfer started without metadata");
     if (frame.opcode === FileTransferOpcode.FileChunk) {
+      if (
+        frame.payload.byteLength > maxChunkBytes ||
+        ++state.chunks > Math.ceil(state.request.size / maxChunkBytes)
+      )
+        throw new Error("File transfer chunk is oversized");
       state.received += frame.payload.byteLength;
       if (state.received > state.request.size) throw new Error("File transfer is oversized");
       return { request: state.request, frame };
@@ -135,10 +161,26 @@ export function createNativeUploadTracker() {
     if (file && (!state.ended || file.size !== state.request.size))
       throw new Error("File upload completed before its transfer ended");
     pending.delete(requestId);
+    clearTimeout(state.timer);
     return { request: state.request, file };
   }
   function cancel(requestId) {
+    const state = pending.get(requestId);
+    if (state) clearTimeout(state.timer);
     pending.delete(requestId);
   }
-  return { begin, receive, complete, cancel };
+  function cancelAll() {
+    for (const state of pending.values()) clearTimeout(state.timer);
+    pending.clear();
+  }
+  return {
+    begin,
+    receive,
+    complete,
+    cancel,
+    cancelAll,
+    get pendingCount() {
+      return pending.size;
+    },
+  };
 }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { persistDocumentUpload, documentFile } from "./documents.mjs";
+import { registerDocument, documentFile } from "./documents.mjs";
 import { runPythonJob } from "./tool-worker.mjs";
 
 test("credential-free bounded Python computes real data and returns documents and charts", async () => {
@@ -12,10 +12,7 @@ test("credential-free bounded Python computes real data and returns documents an
   mkdirSync(config.recordsDir);
   const student = { id: "s01", workspacePath: join(root, "workspace") };
   try {
-    const input = await persistDocumentUpload(config, student, {
-      name: "data.csv",
-      data: Buffer.from("value\n2\n4\n6\n").toString("base64"),
-    });
+    const input = registerDocument(config, student, "data.csv", Buffer.from("value\n2\n4\n6\n"));
     const result = await runPythonJob(config, student, {
       files: [input.id],
       code: `import os,json,pandas as pd,matplotlib.pyplot as plt

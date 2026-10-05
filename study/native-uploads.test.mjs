@@ -12,6 +12,7 @@ import {
   archiveNativeUpload,
   createNativeUploadTracker,
   isRegisteredNativeAttachment,
+  NATIVE_UPLOAD_LIMITS,
   validateNativeUploadFile,
   validateNativeUploadRequest,
 } from "./native-uploads.mjs";
@@ -102,6 +103,89 @@ test("native transfer frames must match one registered request and its size", ()
   );
 });
 
+test("native transfer limits bound active uploads, frames, chunks and pending lifetime", async () => {
+  const tracker = createNativeUploadTracker({ timeoutMs: 10 });
+  for (let index = 0; index < NATIVE_UPLOAD_LIMITS.active; index++)
+    tracker.begin({ ...request, requestId: `request-${index}` });
+  assert.throws(() => tracker.begin({ ...request, requestId: "request-over-limit" }), /active/);
+  tracker.cancelAll();
+  assert.equal(tracker.pendingCount, 0);
+
+  let expired;
+  const timed = createNativeUploadTracker({
+    timeoutMs: 10,
+    onExpire: (value) => (expired = value),
+  });
+  timed.begin(request);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(expired.requestId, request.requestId);
+  assert.equal(timed.pendingCount, 0);
+
+  const oversizedChunk = createNativeUploadTracker();
+  oversizedChunk.begin({ ...request, size: NATIVE_UPLOAD_LIMITS.chunkBytes + 1 });
+  oversizedChunk.receive(
+    frame(FileTransferOpcode.FileBegin, {
+      metadata: {
+        mime: request.mimeType,
+        size: NATIVE_UPLOAD_LIMITS.chunkBytes + 1,
+        encoding: "binary",
+        modifiedAt: request.modifiedAt,
+        fileName: request.fileName,
+      },
+    }),
+  );
+  assert.throws(
+    () =>
+      oversizedChunk.receive(
+        frame(FileTransferOpcode.FileChunk, {
+          payload: Buffer.alloc(NATIVE_UPLOAD_LIMITS.chunkBytes + 1),
+        }),
+      ),
+    /oversized/,
+  );
+  assert.throws(
+    () => oversizedChunk.receive(Buffer.alloc(NATIVE_UPLOAD_LIMITS.frameBytes + 1)),
+    /frame is oversized/,
+  );
+  oversizedChunk.cancelAll();
+});
+
+test("native transfer accepts one full 10 MiB file in 80 native chunks", () => {
+  const size = DOCUMENT_LIMITS.fileBytes;
+  const largeRequest = { ...request, requestId: "large-request", size };
+  const tracker = createNativeUploadTracker();
+  tracker.begin(largeRequest);
+  tracker.receive(
+    encodeFileTransferFrame({
+      opcode: FileTransferOpcode.FileBegin,
+      requestId: largeRequest.requestId,
+      metadata: {
+        mime: largeRequest.mimeType,
+        size,
+        encoding: "binary",
+        modifiedAt: largeRequest.modifiedAt,
+        fileName: largeRequest.fileName,
+      },
+    }),
+  );
+  for (let chunk = 0; chunk < 80; chunk++)
+    tracker.receive(
+      encodeFileTransferFrame({
+        opcode: FileTransferOpcode.FileChunk,
+        requestId: largeRequest.requestId,
+        payload: Buffer.alloc(NATIVE_UPLOAD_LIMITS.chunkBytes),
+      }),
+    );
+  tracker.receive(
+    encodeFileTransferFrame({
+      opcode: FileTransferOpcode.FileEnd,
+      requestId: largeRequest.requestId,
+    }),
+  );
+  assert.equal(tracker.pendingCount, 1);
+  tracker.cancelAll();
+});
+
 test("native uploads are archived per student and attachments need their exact ledger entry", async () => {
   const root = mkdtempSync(join(tmpdir(), "study-native-upload-"));
   const config = { recordsDir: join(root, "records") };
@@ -133,6 +217,10 @@ test("native uploads are archived per student and attachments need their exact l
   assert.equal(isRegisteredNativeAttachment(attachment, records), true);
   assert.equal(
     isRegisteredNativeAttachment({ ...attachment, path: "/workspace/auth.json" }, records),
+    false,
+  );
+  assert.equal(
+    isRegisteredNativeAttachment({ ...attachment, id: "upload_foreign" }, records),
     false,
   );
   assert.equal(
