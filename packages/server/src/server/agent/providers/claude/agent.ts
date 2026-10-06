@@ -77,6 +77,13 @@ import {
 import { renderPromptAttachmentAsText } from "../../prompt-attachments.js";
 import { claudeQuery, type ClaudeOptions, type ClaudeQueryFactory } from "./query.js";
 import {
+  assertClaudeTextOnlyConfig,
+  assertClaudeTextOnlyTransition,
+  assertClaudeTextOnlyRuntime,
+  assertClaudeTextOnlyPrompt,
+  claudeTextOnlyOptions,
+} from "./text-only.js";
+import {
   realClaudeRewindSdk,
   revertClaudeConversation,
   revertClaudeFiles,
@@ -973,6 +980,7 @@ function coerceSessionMetadata(metadata: AgentMetadata | undefined): Partial<Age
     return {};
   }
 
+  assertClaudeTextOnlyConfig(metadata);
   const result: Partial<AgentSessionConfig> = {};
   if (metadata.provider === "claude" || metadata.provider === "codex") {
     result.provider = metadata.provider;
@@ -1565,6 +1573,7 @@ export class ClaudeAgentClient implements AgentClient {
       provider: "claude",
       cwd: merged.cwd,
     };
+    assertClaudeTextOnlyTransition(handle.metadata, mergedConfig);
     const claudeConfig = this.assertConfig(mergedConfig);
     return new ClaudeAgentSession(claudeConfig, {
       defaults: this.defaults,
@@ -1697,6 +1706,7 @@ export class ClaudeAgentClient implements AgentClient {
   }
 
   private assertConfig(config: AgentSessionConfig): ClaudeAgentConfig {
+    if (assertClaudeTextOnlyConfig(config)) assertClaudeTextOnlyRuntime(this.runtimeSettings);
     if (config.provider !== "claude") {
       throw new Error(`ClaudeAgentClient received config for provider '${config.provider}'`);
     }
@@ -2048,6 +2058,7 @@ class ClaudeContextUsageState {
 }
 
 class ClaudeAgentSession implements AgentSession {
+  private readonly textOnly: boolean;
   readonly provider = "claude" as const;
   readonly capabilities = CLAUDE_CAPABILITIES;
 
@@ -2138,6 +2149,7 @@ class ClaudeAgentSession implements AgentSession {
   constructor(config: ClaudeAgentConfig, options: ClaudeAgentSessionOptions) {
     this.config = config;
     assertClaudeThinkingOptionSupported(config.model, config.thinkingOptionId);
+    this.textOnly = assertClaudeTextOnlyConfig(config);
     this.launchEnv = options.launchEnv;
     this.agentId = options.agentId;
     this.defaults = options.defaults;
@@ -2239,6 +2251,7 @@ class ClaudeAgentSession implements AgentSession {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
+    if (this.textOnly) assertClaudeTextOnlyPrompt(prompt);
     if (this.closed) {
       throw new Error("Claude session is closed");
     }
@@ -2321,6 +2334,7 @@ class ClaudeAgentSession implements AgentSession {
     prompt: AgentPromptInput,
     options: SteerActiveTurnOptions,
   ): Promise<SteerResult> {
+    if (this.textOnly) assertClaudeTextOnlyPrompt(prompt);
     if (this.resolveSlashCommandInvocation(prompt)) {
       return { status: "unavailable" };
     }
@@ -2681,7 +2695,9 @@ class ClaudeAgentSession implements AgentSession {
       provider: "claude",
       sessionId: this.claudeSessionId,
       nativeHandle: this.claudeSessionId,
-      metadata: { ...persistedConfig },
+      metadata: assertClaudeTextOnlyConfig(this.config, this.textOnly)
+        ? { ...persistedConfig, claudeTextOnly: true, providerOptions: { textOnly: true } }
+        : { ...persistedConfig },
     };
     return this.persistence;
   }
@@ -2763,6 +2779,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   async listCommands(): Promise<AgentSlashCommand[]> {
+    if (assertClaudeTextOnlyConfig(this.config, this.textOnly)) return [];
     const q = await this.ensureQuery();
     const commands = await q.supportedCommands();
     const commandMap = new Map<string, AgentSlashCommand>();
@@ -2800,6 +2817,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   async revertFiles(input: { messageId: string }): Promise<void> {
+    if (this.textOnly) throw new Error("Claude text-only has no file checkpoints");
     const messageId = await this.resolveClaudeMessageId(input.messageId);
     await revertClaudeFiles({
       query: await this.ensureQuery(),
@@ -3178,6 +3196,7 @@ class ClaudeAgentSession implements AgentSession {
       {
         runtimeSettings: this.runtimeSettings,
         launchEnv: this.launchEnv,
+        textOnly: assertClaudeTextOnlyConfig(this.config, this.textOnly),
         queryFactory: this.queryFactory,
         onChildProcess: (child) => {
           this.childProcess = child;
@@ -3297,12 +3316,11 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   private async buildOptions(): Promise<ClaudeOptions> {
+    const textOnly = assertClaudeTextOnlyConfig(this.config, this.textOnly);
+    const { textOnly: _marker, ...sdkProviderOptions } = this.config.providerOptions;
     const { thinking, effort, ultracode } = this.resolveThinkingConfig();
     const appendedSystemPrompt = this.buildAppendedSystemPrompt();
-    const providerOptions = applyClaudeToolPolicy(
-      this.config.providerOptions,
-      this.config.toolPolicy,
-    );
+    const providerOptions = applyClaudeToolPolicy(sdkProviderOptions, this.config.toolPolicy);
     const settingsOptions = this.buildSettingsOptions(providerOptions, { ultracode });
     const sdkEnv = this.harnessEnvironment;
     assertClaudeModeCanRun(this.currentMode, sdkEnv);
@@ -3380,6 +3398,9 @@ class ClaudeAgentSession implements AgentSession {
         ...(base.disallowedTools ?? []),
         ...this.runtimeSettings.disallowedTools,
       ];
+    }
+    if (textOnly) {
+      return { ...base, ...claudeTextOnlyOptions(), systemPrompt: appendedSystemPrompt };
     }
     return base;
   }

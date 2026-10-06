@@ -570,3 +570,36 @@ Tests use `isProviderAvailable(provider)` to skip when the binary or credentials
 - Gate the operations **the daemon issues** (prompt, slash command, summarize) on both the terminal and cancel settlement. Permission and question responses are not runner operations and must stay outside the gate, or an auto-approve deadlocks the stop. Runs the _provider_ starts on its own — plugin or autonomous wakes — are observed, not gated: the daemon does not choose when they begin, and holding their events back does not protect them from a cancel already in flight, it only hides a run that may already be dead.
 - Fail closed: if the cancel never succeeded you never proved the run stopped, so refuse new runs until the next Stop issues a fresh cancel. `AgentManager` already turns a rejected `interrupt()` into a refused cancel.
 - Suppress the canceled run's residue only until its authoritative terminal. Anything the provider publishes after that terminal is a new run by construction and must take the normal live path — buffering it and replaying it later is how autonomous/plugin wakes get lost.
+
+## Fixed Claude text-only restriction (source only)
+
+Trusted callers can select `providerOptions: { textOnly: true }` on the existing
+Claude provider. This opt-in restriction grants no employee or review access.
+Other provider options, tools policies, nonempty MCP configuration and internal
+agents conflict with the restriction and fail before opening a session.
+
+The provider supplies typed empty tool and settings-source lists, wildcard tool
+denial, strict empty MCP configuration, empty agents/plugins/hooks, disabled
+memory/hooks/checkpointing and the fixed `disable-slash-commands` switch. It uses
+plain managed instructions instead of the Claude Code preset. It accepts string
+text only, hides slash commands and rejects file rewind. Runtime command append
+and replacement are denied; the ordinary subscription environment path remains.
+The marker never reaches SDK Options. Ordinary sessions remain unchanged.
+
+The seal persists in provider metadata and managed config. Recognized malformed
+metadata and seal removal on resume/reload fail closed. Normal creation and
+session-open plugins still run, including the native capacity guard. The manager
+checks the seal after plugins and suppresses daemon MCP and native tool catalogs
+for sealed creation/resume only. The provider reapplies fixed controls on query
+restarts, including mode/model/thinking changes.
+
+[The restriction policy](../packages/server/src/server/agent/providers/claude/text-only.ts),
+[provider fake tests](../packages/server/src/server/agent/providers/claude/agent.text-only.test.ts)
+and [manager fake tests](../packages/server/src/server/agent/agent-manager.text-only.test.ts)
+record this source contract. They do not prove actual CLI behavior or isolation.
+Host plugins/environment, adopted SDK/CLI/module closure, credential custody,
+startup and resumed ZERO builtin/ZERO MCP catalogs and exact-job interruption
+still require independent current evidence. Fully removed/rewritten persistence
+cannot be recognized without an independent trusted binding. Production remains
+closed; employee admission, sealed create/resume leases and runtime adoption are
+separate held work. No real provider was tested or launched for this source slice.
