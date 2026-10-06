@@ -1,5 +1,5 @@
-import { readFileSync, lstatSync, writeFileSync, renameSync } from "node:fs";
-import { dirname, isAbsolute } from "node:path";
+import { readFileSync, lstatSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -7,6 +7,12 @@ import { z } from "zod";
 import { employeeToolArguments } from "./employee-profile.mjs";
 import { documentRecords, documentFile, registerDocument } from "./documents.mjs";
 import { runPythonJob } from "./tool-worker.mjs";
+import {
+  assertEmployeeControl,
+  revokeEmployeeLifecycle,
+  employeeOwner,
+  withEmployeeSubmitLease,
+} from "./employee-lifecycle.mjs";
 const run = promisify(execFile);
 
 const Binding = z
@@ -16,66 +22,36 @@ const Binding = z
     revision: z.string().min(1).max(200),
   })
   .strict();
-const Control = Binding.extend({
-  active: z.boolean(),
-  expires_ms: z.number().int().positive(),
-}).strict();
-
-function employeeControl(worker) {
-  const path = worker.employeeControlFile;
-  if (
-    !isAbsolute(path) ||
-    lstatSync(path).isSymbolicLink() ||
-    lstatSync(path).mode & 0o077 ||
-    lstatSync(dirname(path)).mode & 0o077
-  ) {
-    throw Error("Employee control must be private host state");
-  }
-  return Control.parse(JSON.parse(readFileSync(path, "utf8")));
-}
-
 export function assertEmployeeAssignment(worker, request) {
-  const control = employeeControl(worker);
-  const binding = Binding.parse(request.assignment);
-  if (
-    !control.active ||
-    control.expires_ms <= Date.now() ||
-    Object.keys(binding).some((key) => binding[key] !== control[key])
-  ) {
-    throw Error("Employee job is revoked, expired or has a different revision");
-  }
-  return control;
+  return assertEmployeeControl(worker, Binding.parse(request.assignment));
 }
 
 export async function revokeEmployeeTools(config, worker, binding) {
-  const control = employeeControl(worker);
-  if (binding.job_id !== control.job_id || binding.producer_id !== control.producer_id) {
-    throw Error("Cannot revoke another concept's tools");
-  }
-  const staged = worker.employeeControlFile + ".tmp";
-  writeFileSync(staged, JSON.stringify({ ...control, active: false }), { mode: 0o600 });
-  renameSync(staged, worker.employeeControlFile);
-  const runtime = createHash("sha256").update(config.recordsDir).digest("hex");
-  const found = await run(
-    "docker",
-    [
-      "ps",
-      "-aq",
-      "--filter",
-      "label=lulu.study.compute=owned",
-      "--filter",
-      `label=lulu.study.runtime=${runtime}`,
-      "--filter",
-      `label=lulu.study.student=${worker.id}`,
-    ],
-    { timeout: 5000 },
-  );
-  const ids = found.stdout.split("\n").filter((id) => /^[a-f0-9]{12,64}$/.test(id));
-  if (ids.length) await run("docker", ["rm", "-f", ...ids], { timeout: 5000 });
-  return { cancelled_computations: ids.length };
+  if (
+    worker.employeeScope?.runtime_id !==
+    createHash("sha256").update(config.recordsDir).digest("hex")
+  )
+    throw Error("Employee runtime owner mismatch");
+  return revokeEmployeeLifecycle(worker, Binding.parse(binding));
 }
 
-export async function handleEmployeeTool(config, worker, request) {
+// The future Hermes caller must hold this through SDK acceptance, never merely
+// call an active check before send. Its integration remains a separate hold.
+export async function withEmployeeSubmit(config, worker, binding, send) {
+  if (
+    worker.employeeScope?.runtime_id !==
+    createHash("sha256").update(config.recordsDir).digest("hex")
+  )
+    throw Error("Employee runtime owner mismatch");
+  return withEmployeeSubmitLease(worker, Binding.parse(binding), send);
+}
+
+export function handleEmployeeTool(config, worker, request) {
+  return employeeOwner(worker).operation(Binding.parse(request.assignment), (lease) =>
+    handleAssignedTool(config, worker, request, lease),
+  );
+}
+async function handleAssignedTool(config, worker, request, lease) {
   assertEmployeeAssignment(worker, request);
   const { operation, assignment: _assignment, files, ...values } = request;
   if (operation !== "render_video" && (!Array.isArray(files) || files.length)) {
@@ -108,12 +84,13 @@ export async function handleEmployeeTool(config, worker, request) {
         revision: request.assignment.revision,
       },
     );
-  } else result = await renderEmployeeVideo(config, worker, request, args);
+  } else result = await renderEmployeeVideo(config, worker, request, args, lease);
   assertEmployeeAssignment(worker, request);
   return result;
 }
 
-export async function renderEmployeeVideo(config, worker, request, args) {
+export async function renderEmployeeVideo(config, worker, request, args, lease) {
+  if (!lease) throw Error("Employee render requires its sole host worker");
   assertEmployeeAssignment(worker, request);
   if (!/^sha256:[a-f0-9]{64}$/.test(worker.employeeMediaImage || "")) {
     throw Error("Employee media executor is unavailable");
@@ -159,6 +136,7 @@ print(json.dumps({'rendered':True,'audio':'none','width':720,'height':1280}))
 `;
   const scopedConfig = {
     ...config,
+    employeeOperation: lease,
     computeImage: worker.employeeMediaImage,
     registerComputationOutput: (outputConfig, owner, name, bytes, kind, details) => {
       assertEmployeeAssignment(worker, request);

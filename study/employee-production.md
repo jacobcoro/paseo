@@ -28,9 +28,43 @@ checkout or other concept input. Its existing hard CPU, memory, swap, PID,
 filesystem and lifetime limits apply. Employee runtimes admit one tool at a time.
 Only the exact revision's saved MP4 ID and computation receipt return.
 
-Host revocation atomically persists inactive state before interruption. Container
-cleanup matches the existing computation ownership, runtime and concept labels.
-Failure to interrupt never restores intake or tool permission.
+Host withdrawal holds one private writer lease and fsyncs inactive state and its
+directory before cleanup. The control also binds runtime, broker and worker IDs
+and generations, plus a revoke epoch and nonce. A retained tombstone denies
+reactivation of that generation. Missing legacy fields fail closed. Withdrawal
+does not require an unexpired submission permit. Retain its owned binding.
+
+The exclusive worker lease and intents stay outside every employee writable root.
+Unknown stale leases are never stolen. Each intent precedes asynchronous work.
+Employee create/start mutations use the writer lease and settle before cleanup.
+The existing limits remain; normal students keep their existing executor path.
+Employee and ordinary profiles cannot share one runtime. Employee queues reject
+revoked calls; revocation does not wait for an occupied tool slot.
+
+Cleanup uses the recorded CID, name and exact generation labels, then observes
+that CID absent. It never enumerates or removes a runtime pool. An unknown
+create/start/removal outcome retains ownership and produces no acknowledgment.
+The five-second withdrawal bound leaves the existing ten-second bridge limit
+unchanged. Slow observations, absent workers and refused cancellation remain
+held. Acknowledgments bind the current nonce and worker lease, expire after one
+second and require fresh owned-absence observations. They do not prove kernel
+confinement, daemon lifetime or source closure.
+
+The separate Hermes integration must wrap its final checks and SDK acceptance in
+`withEmployeeSubmit(config, worker, {job_id, producer_id, revision}, send)`.
+Await the callback inside the lease. First persist inactive; then drain earlier
+submit leases, obtain current worker quiescence and independent host evidence;
+only then cancel the exact native producer. Stop can still fail after revocation.
+Do not erase withdrawal mappings when approval expires. This slice does not
+edit the accepted Hermes bridge or supply its independent boundary reader.
+Unknown SDK acceptance retains its submit lease. Withdrawal still persists
+inactive, but cannot certify quiescence or cancel before host reconciliation.
+
+Alternate UI, daemon, plugin and autonomous entrypoints remain outside this
+fence. Their absence or participation requires Root's separate review. Native
+builtins, broker custody, actual namespaces, loaded policies and module closure
+remain unproved. Production stays closed. Offline tests use fake containers and
+separate synthetic Node processes; they prove source serialization only.
 
 The provider broker is separate trusted credential custody. Its clean startup
 config disables shell, view-image, apps, search, plugins, memory and delegation.
