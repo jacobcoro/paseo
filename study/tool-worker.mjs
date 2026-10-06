@@ -14,6 +14,7 @@ import {
 import { join, basename } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { documentRecords, documentFile, registerDocument, toolDirectories } from "./documents.mjs";
+import { employeeOwner, startEmployeeOwner } from "./employee-lifecycle.mjs";
 
 const run = promisify(execFile);
 async function cleanupOwnedCompute(config) {
@@ -34,7 +35,24 @@ async function cleanupOwnedCompute(config) {
   if (ids.length) await run("docker", ["rm", "-f", ...ids], { timeout: 10000 });
 }
 export const COMPUTE_LIMITS = { workers: 4, queue: 64, memoryMiB: 768, timeoutMs: 45000, pids: 64 };
+function executorFor(config, student) {
+  if (student.profile !== "employee-production")
+    return {
+      jobId: randomUUID(),
+      execute: (args, options) => run("docker", args, options),
+      cleanup: (name) => run("docker", ["rm", "-f", name], { timeout: 5000 }).catch(() => {}),
+    };
+  const owner = employeeOwner(student);
+  if (!config.employeeOperation)
+    throw Error("Employee computation requires its admitted host operation");
+  return {
+    jobId: config.employeeOperation.id,
+    execute: (args, options) => owner.compute(config.employeeOperation, args, options),
+    cleanup: () => Promise.resolve(), // The admitted operation owns exact-CID cleanup.
+  };
+}
 export async function runPythonJob(config, student, request) {
+  const executor = executorFor(config, student);
   if (typeof request.code !== "string" || Buffer.byteLength(request.code) > 32000)
     throw Error("Python code must be under 32 KiB");
   if (
@@ -50,7 +68,7 @@ export async function runPythonJob(config, student, request) {
     if (!record || !file) throw Error("File not found in this student's workspace");
     return { record, file };
   });
-  const jobId = randomUUID();
+  const jobId = executor.jobId;
   const name = "lulu-compute-" + jobId;
   const root = join(config.recordsDir, "computation", student.id, jobId);
   mkdirSync(join(root, "inputs"), { recursive: true, mode: 0o700 });
@@ -102,10 +120,11 @@ export async function runPythonJob(config, student, request) {
     error = "",
     failed = false;
   try {
-    const result = await run("docker", args, {
+    const options = {
       timeout: COMPUTE_LIMITS.timeoutMs,
       maxBuffer: 48 * 1024 * 1024,
-    });
+    };
+    const result = await executor.execute(args, options);
     output = result.stdout;
     error = result.stderr;
   } catch (failure) {
@@ -113,7 +132,7 @@ export async function runPythonJob(config, student, request) {
     output = String(failure.stdout || "");
     error = String(failure.stderr || failure.message);
   } finally {
-    await run("docker", ["rm", "-f", name], { timeout: 5000 }).catch(() => {});
+    await executor.cleanup(name);
   }
   const generated = [];
   let computation = {
@@ -184,15 +203,46 @@ export async function handleTool(config, student, request) {
   }
   throw Error("Unknown study tool");
 }
-export function startToolWorker(config) {
+export function startToolWorker(config, dependencies = {}) {
   const employeeRuntime = config.students.every(
     (student) => student.profile === "employee-production",
   );
+  if (
+    !employeeRuntime &&
+    config.students.some((student) => student.profile === "employee-production")
+  )
+    throw Error("Employee lifecycle requires a separate runtime");
   const workers = employeeRuntime ? 1 : COMPUTE_LIMITS.workers;
   const pending = [],
     active = new Set(),
     seen = new Set();
   let stopped = false;
+  const employeeOwners = [];
+  try {
+    for (const student of config.students.filter(
+      (candidate) => candidate.profile === "employee-production",
+    )) {
+      if (
+        student.employeeScope?.runtime_id !==
+        createHash("sha256").update(config.recordsDir).digest("hex")
+      )
+        throw Error("Employee runtime owner mismatch");
+      employeeOwners.push(
+        startEmployeeOwner(student, {
+          ...dependencies,
+          pending: () =>
+            pending.filter((entry) => entry.student.id === student.id).length +
+            [...active].filter((key) => key.startsWith(student.id + "/")).length +
+            readdirSync(toolDirectories(config, student).inbox).filter((file) =>
+              /^[a-f0-9-]{36}\.json$/.test(file),
+            ).length,
+        }),
+      );
+    }
+  } catch (error) {
+    for (const owner of employeeOwners) owner.close();
+    throw error;
+  }
   for (const student of config.students) toolDirectories(config, student);
   async function process(entry) {
     try {
@@ -227,6 +277,11 @@ export function startToolWorker(config) {
   }
   function scan() {
     if (stopped) return;
+    // Revocation does not wait behind the single occupied employee tool slot.
+    for (const owner of employeeOwners)
+      void owner
+        .poll()
+        .catch((error) => console.error("Employee interruption held:", error.message));
     for (const student of config.students) {
       const directories = toolDirectories(config, student);
       for (const file of readdirSync(directories.inbox)) {
@@ -250,7 +305,8 @@ export function startToolWorker(config) {
   }
   // Restart cannot overlap a previous pool. Only this runtime's labelled
   // credential-free workers are removed before admitting another computation.
-  const ready = cleanupOwnedCompute(config);
+  // Employee ownership is exact-job and generation scoped. Never reap a pool.
+  const ready = employeeOwners.length ? Promise.resolve() : cleanupOwnedCompute(config);
   let initialized = false;
   void ready
     .then(() => {
@@ -269,6 +325,7 @@ export function startToolWorker(config) {
     stopped = true;
     clearInterval(timer);
     while (active.size) await new Promise((resolve) => setTimeout(resolve, 100));
+    for (const owner of employeeOwners) owner.close();
   };
 }
 if (process.argv[1]?.endsWith("tool-worker.mjs")) {
