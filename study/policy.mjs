@@ -74,6 +74,15 @@ export function studentMessage(message, student, nativeDocuments = []) {
   if (message.type === "ping") return message;
   if (message.type !== "session") return null;
   const request = message.message;
+  if (
+    student.profile === "employee-production" &&
+    [
+      "set_agent_model_request",
+      "set_agent_thinking_request",
+      "agent.config.apply.request",
+    ].includes(request?.type)
+  )
+    return null;
   if (request?.type === "file.upload.request")
     return validateNativeUploadRequest(request) ? message : null;
   if (!request || !requestAllowed(request, student, nativeDocuments)) return null;

@@ -37,8 +37,19 @@ config disables shell, view-image, apps, search, plugins, memory and delegation.
 `employeeModelCatalog` retains the current assigned model metadata while removing
 native shell/apply-patch/search capabilities and selecting direct tools. Codex
 loads `model_catalog_json` only at startup. A per-thread override is insufficient.
-This source candidate still needs actual installed native inventory and denial
-proof. MCP inventory alone does not prove native built-in confinement.
+These tool reductions are additional controls. MCP inventory does not prove
+native built-in confinement. The host-pinned `employee-production` permission
+profile denies filesystem reads outside approved runtime libraries and the
+assigned workspace, including broker credentials and procfs. It disables tool
+network access. The native adapter rejects legacy sandbox or workflow overrides;
+employee model, mode, feature and profile reconfiguration are unavailable.
+
+The granular filesystem rules require native Codex 0.160. Actual read-denial
+precedence, symlink behavior and authentication separation remain unproved.
+Before a real credential or turn, First Mate must review a fake-canary-only
+native engine fixture. It must show an assigned-file read and deny credential,
+procfs, other-job, symlink and network access through actual native tool paths.
+An unavailable sandbox must fail closed. Source config is not runtime proof.
 
 The trusted host publishes returned files through Phone Farming's existing
 Experiment/review request contract. Employee tools return IDs, not study-page

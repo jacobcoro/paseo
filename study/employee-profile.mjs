@@ -28,11 +28,10 @@ export function employeeAgentConfig() {
     cwd: "/workspace",
     model: studyModel,
     thinkingOptionId: studyReasoning,
-    modeId: "auto",
     systemPrompt: employeeInstructions,
     providerOptions: {
       approval_policy: "never",
-      sandbox_mode: "read-only",
+      default_permissions: "employee-production",
       web_search: "disabled",
       features: { multi_agent_v2: false },
     },
@@ -69,7 +68,7 @@ model_reasoning_effort = "${studyReasoning}"
 model_instructions_file = "/home/node/.codex/employee-instructions.md"
 model_catalog_json = "/home/node/.codex/employee-models.json"
 approval_policy = "never"
-sandbox_mode = "read-only"
+default_permissions = "employee-production"
 web_search = "disabled"
 [features]
 shell_tool = false
@@ -107,6 +106,17 @@ startup_timeout_sec = 20
 tool_timeout_sec = 60
 [mcp_servers.study.env]
 STUDY_TOOL_SETTINGS = "/home/node/.codex/employee-tools.json"
+[permissions.employee-production.filesystem]
+"/" = "deny"
+"/usr" = "read"
+"/bin" = "read"
+"/lib" = "read"
+"/lib64" = "read"
+"/workspace" = "read"
+"/home/node/.codex" = "deny"
+"/proc" = "deny"
+[permissions.employee-production.network]
+enabled = false
 `;
 }
 

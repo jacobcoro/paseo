@@ -72,3 +72,42 @@ test("student legacy agent creation and terminal access remain blocked", () => {
     null,
   );
 });
+
+test("employee producer reconfiguration cannot change the pinned native permission profile", () => {
+  const employee = { ...student, profile: "employee-production" };
+  for (const type of [
+    "set_agent_model_request",
+    "set_agent_thinking_request",
+    "agent.config.apply.request",
+    "set_agent_mode_request",
+    "set_agent_feature_request",
+  ]) {
+    const payload = request(type, {
+      agentId: "primary",
+      modelId: "gpt-6-astra",
+      config: {
+        providerOptions: {
+          default_permissions: ":unrestricted",
+          sandbox_mode: "danger-full-access",
+        },
+      },
+    });
+    assert.equal(studentMessage(payload, employee), null);
+  }
+  assert.ok(
+    studentMessage(
+      request("send_agent_message_request", {
+        agentId: "primary",
+        text: "Shorten the first shot.",
+      }),
+      employee,
+    ),
+  );
+  assert.ok(studentMessage(request("cancel_agent_request", { agentId: "primary" }), employee));
+  assert.ok(
+    studentMessage(
+      request("set_agent_model_request", { agentId: "primary", modelId: "gpt-6.1-sol" }),
+      student,
+    ),
+  );
+});

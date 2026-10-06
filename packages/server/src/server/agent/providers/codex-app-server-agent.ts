@@ -3558,6 +3558,9 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.currentMode = config.modeId ?? DEFAULT_CODEX_MODE_ID;
     this.providerOptions =
       validateProviderOptions("codex", CodexProviderOptionsSchema, config.providerOptions) ?? {};
+    if (this.providerOptions.default_permissions !== undefined && config.modeId !== undefined) {
+      throw new Error("Named permission profiles cannot be combined with a legacy workflow mode");
+    }
     this.config = config;
     this.harnessEnvironment = deps.environment ?? buildCodexAppServerEnv();
     this.asyncQuestions = new CodexAsyncQuestions(resumeHandle?.metadata?.asyncQuestions);
@@ -4607,6 +4610,9 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   async setMode(modeId: string): Promise<void | AgentProviderNotice> {
+    if (this.providerOptions.default_permissions !== undefined) {
+      throw new Error("Named permission profiles cannot be replaced by a legacy workflow mode");
+    }
     validateCodexMode(modeId);
     this.currentMode = modeId;
     this.hasWorkflowModeOverride = true;
@@ -5352,6 +5358,15 @@ export class CodexAppServerAgentSession implements AgentSession {
         mcpServers[name] = toCodexMcpConfig(serverConfig);
       }
       innerConfig.mcp_servers = mcpServers;
+    }
+    const namedProfile = this.providerOptions.default_permissions;
+    if (
+      namedProfile !== undefined &&
+      (innerConfig.default_permissions !== namedProfile ||
+        innerConfig.sandbox_mode !== undefined ||
+        innerConfig.sandbox_workspace_write !== undefined)
+    ) {
+      throw new Error("Named permission profile changed or legacy sandbox override was supplied");
     }
     const configured = applyCodexToolPolicy(innerConfig, this.config.toolPolicy);
     return Object.keys(configured).length > 0 ? configured : null;
