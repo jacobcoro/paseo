@@ -36,6 +36,8 @@ async function cleanupOwnedCompute(config) {
 }
 export const COMPUTE_LIMITS = { workers: 4, queue: 64, memoryMiB: 768, timeoutMs: 45000, pids: 64 };
 function executorFor(config, student) {
+  if (student.profile === "employee-concept-text")
+    throw Error("Concept text profile has no tool executor");
   if (student.profile !== "employee-production")
     return {
       jobId: randomUUID(),
@@ -179,6 +181,7 @@ export async function runPythonJob(config, student, request) {
   return result;
 }
 export async function handleTool(config, student, request) {
+  if (student.profile === "employee-concept-text") throw Error("Concept text profile has no tools");
   if (student.profile === "employee-production") {
     const { handleEmployeeTool } = await import("./employee-tools.mjs");
     return handleEmployeeTool(config, student, request);
@@ -204,6 +207,8 @@ export async function handleTool(config, student, request) {
   throw Error("Unknown study tool");
 }
 export function startToolWorker(config, dependencies = {}) {
+  if (config.students.some((student) => student.profile === "employee-concept-text"))
+    throw Error("Concept text profile cannot initialize a tool worker");
   const employeeRuntime = config.students.every(
     (student) => student.profile === "employee-production",
   );

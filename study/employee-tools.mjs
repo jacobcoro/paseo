@@ -14,6 +14,7 @@ import {
   withEmployeeSubmitLease,
 } from "./employee-lifecycle.mjs";
 const run = promisify(execFile);
+export { registerConceptDelivery, withdrawConceptText } from "./employee-concept-lifecycle.mjs";
 
 const Binding = z
   .object({
