@@ -49,11 +49,13 @@ async function observe(cid, run) {
   }
 }
 export function employeeOwner(worker) {
+  if (worker.profile !== "employee-production") held();
   const owner = owners.get(root(worker));
   if (!owner || !same(owner.binding, scope(worker))) held();
   return owner;
 }
 export function startEmployeeOwner(worker, dependencies = {}) {
+  if (worker.profile !== "employee-production") held();
   const path = root(worker),
     binding = scope(worker);
   control(worker, {}, false);

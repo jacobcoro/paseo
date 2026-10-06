@@ -36,7 +36,8 @@ export const held = () => {
 export function root(worker) {
   const path = worker.employeeControlFile;
   if (
-    worker.profile !== "employee-production" ||
+    (worker.profile !== "employee-production" &&
+      !(worker.profile === "employee-concept-text" && worker.provider === "claude")) ||
     !isAbsolute(path || "") ||
     fields.some(
       (key) =>
@@ -119,16 +120,17 @@ export function exclusive(path, value) {
 }
 export async function lease(path, fn, deadline, mayRelease = () => true) {
   let release;
+  const ownership = { nonce: randomUUID() };
   while (!release) {
     try {
-      release = exclusive(path, { nonce: randomUUID() });
+      release = exclusive(path, ownership);
     } catch (error) {
       if (error.code !== "EEXIST" || performance.now() >= deadline) throw error;
       await pause();
     }
   }
   try {
-    return await fn();
+    return await fn(ownership.nonce);
   } finally {
     if (mayRelease()) release(); // Unknown sends retain their private lease.
   }
@@ -161,10 +163,10 @@ export async function withEmployeeSubmitLease(worker, assignment, send) {
   let uncertain = false;
   return lease(
     path + ".submit",
-    async () => {
+    async (nonce) => {
       await lease(path + ".writer", () => control(worker, assignment), performance.now() + 1000);
       try {
-        return await send(); // Future Hermes caller must await SDK acceptance inside this lease.
+        return await send(nonce); // Future Hermes caller must await SDK acceptance inside this lease.
       } catch (error) {
         uncertain = true;
         throw error;

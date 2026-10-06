@@ -2,6 +2,8 @@
 
 This fork keeps Paseo's dashboard, composer, streamed timeline, Markdown renderer, and tool cards. The study layer adds student login, an isolated chat, picture uploads, research annotations, non-AI steps, automatic recording, and a read-only researcher dashboard. It does not calculate cognitive offloading or Bloom categories. Those need a separate researcher coding process.
 
+The separate [employee concept-text host contract](employee-concept-text.md) is source only and stays closed without independent current Root-approved evidence.
+
 ## Run the synthetic demo
 
 Use Node 22 and Docker. Keep the runtime directory outside the checkout: it contains generated passwords and recorded data. Build dependencies once:
