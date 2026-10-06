@@ -1,6 +1,6 @@
 # Employee production runtime checkpoint
 
-Updated: 2026-10-06T10:52:00Z.
+Updated: 2026-10-06T11:03:00Z.
 
 Outcome: exact assigned concept, producer and revision use scoped tools and
 credential-free computation. First Mate owns security review and activation.
@@ -23,10 +23,15 @@ passed twelve confinement/resource checks without a provider or external send.
    native shell, view-image, apply-patch, search and delegation. Actual installed
    native inventory/denial and submit/cancel proof are still missing.
 6. Failed: one approved image build stopped at Snap CLI context validation,
-   before Dockerfile stage. No image or media fixture exists. Limits were not
-   exercised. Parent must renew approval for the proposed stdin-tar correction.
+   before Dockerfile stage. Parent renewed one stdin-tar-only correction. It
+   built in 45.79 seconds; pre-apt assertions verified 1 CPU/1 GiB/no swap.
+   Final image uses nonroot user. Builder PID limit remains uncapped.
+   The separate actual employee fixture then completed in 3.65 seconds: existing
+   receiver and assignment store through real MCP to a saved four-second silent
+   720x1280 MP4. Eleven actual Docker resource/mount checks passed. No provider
+   turn or external message occurred. Native built-in proof is still missing.
 7. Done: twelve focused tests, formatting, scoped lint and whole-workspace
-   typecheck. Final narrow source tests must complete before commit.
+   typecheck. Final twelve narrow tests passed on the source commit.
 8. Pending: parent exact-source review, distinct cheap PR shepherd, live proof.
 
 Owned changes: documents, native-controls, model-settings tests, tool-server,
@@ -39,5 +44,5 @@ container, gateway, provider, daemon, live config, grant or external message was
 started or changed. The benchmark producer remains untouched.
 
 Next: collect final narrow tests, commit owned source, return exact source and
-runtime blockers to First Mate. Retain one bounded pull wait for renewed build
-approval or explicit hold. Never infer readiness from prompt text or callbacks.
+runtime blockers to First Mate. Retain one bounded pull wait for the separately proposed native
+proof boundary review. Never infer readiness from prompt text or callbacks.

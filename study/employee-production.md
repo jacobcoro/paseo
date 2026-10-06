@@ -40,7 +40,10 @@ The trusted host publishes returned files through Phone Farming's existing
 Experiment/review request contract. Employee tools return IDs, not study-page
 URLs. Human creative approval never grants send, spend, publishing or access.
 
-No live activation is included. The one approved media build failed during CLI
-context validation before any image stage. Rendering stays unavailable until a
-reviewed pinned image passes the actual media fixture. Source checks do not prove
-the full employee flow, native cancellation, playable output or daily capacity.
+No live activation is included. The first approved build failed at CLI context
+validation. A separately approved stdin-tar correction built the pinned image in
+45.79 seconds and verified its build CPU/memory/swap limits. The actual synthetic
+receiver-to-MCP-to-executor fixture saved a playable four-second silent vertical
+MP4 in 3.65 seconds. Eleven Docker resource/mount checks passed. This mechanical
+fixture used no native provider turn or external message. It does not prove the
+live employee flow, native built-in denial, cancellation or daily capacity.
