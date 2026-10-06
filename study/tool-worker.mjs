@@ -131,8 +131,9 @@ export async function runPythonJob(config, student, request) {
   }
   for (const file of (computation.files || []).slice(0, 10)) {
     try {
+      const exporter = config.registerComputationOutput || registerDocument;
       generated.push(
-        registerDocument(config, student, file.name, Buffer.from(file.data, "base64"), "output", {
+        exporter(config, student, file.name, Buffer.from(file.data, "base64"), "output", {
           jobId,
         }),
       );
@@ -159,6 +160,10 @@ export async function runPythonJob(config, student, request) {
   return result;
 }
 export async function handleTool(config, student, request) {
+  if (student.profile === "employee-production") {
+    const { handleEmployeeTool } = await import("./employee-tools.mjs");
+    return handleEmployeeTool(config, student, request);
+  }
   if (request.operation === "list_files") return documentRecords(config, student);
   if (request.operation === "run_python") return runPythonJob(config, student, request);
   if (request.operation === "write_text")
@@ -180,6 +185,10 @@ export async function handleTool(config, student, request) {
   throw Error("Unknown study tool");
 }
 export function startToolWorker(config) {
+  const employeeRuntime = config.students.every(
+    (student) => student.profile === "employee-production",
+  );
+  const workers = employeeRuntime ? 1 : COMPUTE_LIMITS.workers;
   const pending = [],
     active = new Set(),
     seen = new Set();
@@ -208,7 +217,7 @@ export function startToolWorker(config) {
   }
   function drain() {
     if (stopped) return;
-    while (active.size < COMPUTE_LIMITS.workers && pending.length) {
+    while (active.size < workers && pending.length) {
       const entry = pending.shift();
       active.add(entry.key);
       void process(entry).catch((error) =>

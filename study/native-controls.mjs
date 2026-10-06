@@ -3,6 +3,7 @@ import { studyAgentConfig, studyModel, studyReasoning } from "./chat-profile.mjs
 import { validImages } from "./images.mjs";
 import { studentModels, validModelSettings } from "./model-settings.mjs";
 import { isRegisteredNativeAttachment } from "./native-uploads.mjs";
+import { employeeAgentConfig } from "./employee-profile.mjs";
 
 const Creation = z
   .object({
@@ -24,6 +25,20 @@ const Creation = z
   })
   .passthrough();
 
+function employeeCreation(input, student) {
+  if (input.images?.length || input.attachments?.length) {
+    throw Error("Employee sources require host packet registration");
+  }
+  return {
+    workspaceId: student.workspaceId,
+    idempotencyKey: input.idempotencyKey,
+    config: employeeAgentConfig(),
+    initialPrompt: input.initialPrompt,
+    clientMessageId: input.clientMessageId,
+    labels: { "study.student": student.id, "employee.production": "true" },
+  };
+}
+
 // Native UI owns drafts, tabs and model selection. Only the trusted study profile
 // reaches the daemon; client-supplied tools, environment and worktrees do not.
 export function nativeCreation(request, student, models, nativeDocuments = []) {
@@ -37,6 +52,7 @@ export function nativeCreation(request, student, models, nativeDocuments = []) {
     !validImages(input.images)
   )
     throw Error("This chat or attachment is unavailable");
+  if (student.profile === "employee-production") return employeeCreation(input, student);
   const modelId = input.config.model || studyModel;
   const model = studentModels(models).find((item) => item.id === modelId);
   const thinkingOptionId =

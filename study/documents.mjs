@@ -42,8 +42,19 @@ export function documentRecords(config, student) {
         .map((line) => JSON.parse(line))
     : [];
 }
-function validate(name, bytes, kind) {
+function validate(name, bytes, kind, employeeMedia) {
   const extension = extname(name).toLowerCase();
+  if (employeeMedia && extension === ".mp4") {
+    if (
+      !bytes.length ||
+      bytes.length > DOCUMENT_LIMITS.fileBytes ||
+      bytes.length < 12 ||
+      bytes.subarray(4, 8).toString("ascii") !== "ftyp"
+    ) {
+      throw Error("Invalid bounded employee MP4");
+    }
+    return "video/mp4";
+  }
   if (
     !types[extension] ||
     (kind === "upload" && [".png", ".jpg", ".jpeg", ".webp"].includes(extension))
@@ -74,7 +85,9 @@ export function registerDocument(config, student, name, bytes, kind = "upload", 
     [...name].some((char) => char.codePointAt(0) < 32)
   )
     throw Error("Invalid file name");
-  const mimeType = validate(name, bytes, kind);
+  const employeeMedia =
+    student.profile === "employee-production" && details.productionMedia === true;
+  const mimeType = validate(name, bytes, kind, employeeMedia);
   const previous = documentRecords(config, student);
   const id = createHash("sha256")
     .update(kind + "\0" + name + "\0")
