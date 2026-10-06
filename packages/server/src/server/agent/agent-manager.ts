@@ -1,3 +1,7 @@
+import {
+  assertClaudeTextOnlyConfig,
+  assertClaudeTextOnlyTransition,
+} from "./providers/claude/text-only.js";
 import { projectTimelineRows } from "./timeline-projection.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
@@ -163,6 +167,7 @@ async function assertUsableWorkingDirectory(cwd: string): Promise<void> {
 }
 
 interface PreparedSessionConfig {
+  textOnly: boolean;
   storedConfig: AgentSessionConfig;
   launchConfig: AgentSessionConfig;
   paseoToolPolicy: ProviderPaseoToolsPolicy | undefined;
@@ -1245,6 +1250,7 @@ export class AgentManager {
   ): Promise<ManagedAgent> {
     this.assertAcceptingAgentRegistrations();
     const resolvedAgentId = validateAgentId(agentId ?? this.idFactory(), "createAgent");
+    const textOnly = assertClaudeTextOnlyConfig(config);
     if (this.pluginLifecycle && !config.internal) {
       const request = await this.pluginLifecycle.before("agent.create", {
         config,
@@ -1253,12 +1259,14 @@ export class AgentManager {
       config = { ...request.config, internal: config.internal };
       options = { ...options, env: request.env };
     }
+    assertClaudeTextOnlyConfig(config, textOnly);
     await this.deleteAgentState(resolvedAgentId);
-    const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
-      config,
-      resolvedAgentId,
-      { env: options?.env },
-    );
+    const {
+      storedConfig,
+      launchConfig,
+      paseoToolPolicy,
+      textOnly: sealedLaunch,
+    } = await this.prepareSessionConfig(config, resolvedAgentId, { env: options?.env });
     this.requireEnabledProvider(storedConfig.provider);
     const client = await this.requireAvailableClient({
       provider: storedConfig.provider,
@@ -1272,7 +1280,11 @@ export class AgentManager {
       options?.env,
       { reason: "create", purpose: "interactive", workspaceId: options.workspaceId ?? null },
     );
-    const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
+    const providerLaunchConfig = this.resolveProviderLaunchConfig(
+      launchConfig,
+      launchContext,
+      sealedLaunch,
+    );
     const createOptions = this.buildCreateSessionOptions(options);
     const session = await client.createSession(providerLaunchConfig, launchContext, createOptions);
     await this.requireExternalMcpSupport(session, storedConfig);
@@ -1359,6 +1371,7 @@ export class AgentManager {
       ...overrides,
       provider: handle.provider,
     } as AgentSessionConfig;
+    assertClaudeTextOnlyTransition(metadata, mergedConfig);
     // Decide residency from durable state inside the lifecycle lane. A loader may
     // have read the record before a queued archive or restore completed. Residency is
     // settled before the config is prepared, because a history load reads an archived
@@ -1369,11 +1382,12 @@ export class AgentManager {
       : resumeOptions;
     const purpose = currentResumeOptions?.purpose ?? "interactive";
 
-    const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
-      mergedConfig,
-      resolvedAgentId,
-      { purpose },
-    );
+    const {
+      storedConfig,
+      launchConfig,
+      paseoToolPolicy,
+      textOnly: sealedLaunch,
+    } = await this.prepareSessionConfig(mergedConfig, resolvedAgentId, { purpose });
     const client = this.requireClient(handle.provider);
     const available = await client.isAvailable();
     if (!available) {
@@ -1394,7 +1408,11 @@ export class AgentManager {
         workspaceId: options?.workspaceId ?? null,
       },
     );
-    const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
+    const providerLaunchConfig = this.resolveProviderLaunchConfig(
+      launchConfig,
+      launchContext,
+      sealedLaunch,
+    );
     const session = await client.resumeSession(
       handle,
       providerLaunchConfig,
@@ -1435,7 +1453,12 @@ export class AgentManager {
       throw new Error(`Provider '${input.provider}' does not support importing sessions`);
     }
 
-    const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
+    const {
+      storedConfig,
+      launchConfig,
+      paseoToolPolicy,
+      textOnly: sealedLaunch,
+    } = await this.prepareSessionConfig(
       {
         provider: input.provider,
         cwd: input.cwd,
@@ -1451,7 +1474,11 @@ export class AgentManager {
       undefined,
       { reason: "import", purpose: "interactive", workspaceId: input.workspaceId },
     );
-    const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
+    const providerLaunchConfig = this.resolveProviderLaunchConfig(
+      launchConfig,
+      launchContext,
+      sealedLaunch,
+    );
     const imported = await client.importSession(
       {
         providerHandleId: input.providerHandleId,
@@ -1532,10 +1559,13 @@ export class AgentManager {
       ...overrides,
       provider,
     } as AgentSessionConfig;
-    const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
-      refreshConfig,
-      agentId,
-    );
+    assertClaudeTextOnlyTransition(existing.config, refreshConfig);
+    const {
+      storedConfig,
+      launchConfig,
+      paseoToolPolicy,
+      textOnly: sealedLaunch,
+    } = await this.prepareSessionConfig(refreshConfig, agentId);
     const hadPreviousPaseoToolPolicy = this.paseoToolPolicies.has(agentId);
     const previousPaseoToolPolicy = this.paseoToolPolicies.get(agentId);
     const launchContext = await this.buildLaunchContext(
@@ -1546,7 +1576,11 @@ export class AgentManager {
       undefined,
       { reason: "refresh", purpose: "interactive", workspaceId: existing.workspaceId },
     );
-    const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
+    const providerLaunchConfig = this.resolveProviderLaunchConfig(
+      launchConfig,
+      launchContext,
+      sealedLaunch,
+    );
     if (
       Object.keys(storedConfig.mcpServers ?? {}).length > 0 &&
       existing.session.capabilities.supportsMcpServers !== true
@@ -5161,11 +5195,14 @@ export class AgentManager {
     agentId: string,
     options: { env?: Record<string, string>; purpose?: AgentResumePurpose } = {},
   ): Promise<PreparedSessionConfig> {
+    const textOnly = assertClaudeTextOnlyConfig(config);
     const storedConfig = await this.normalizeConfig(stripInternalPaseoMcpServer(config), {
       env: options.env,
       purpose: options.purpose,
     });
-    const paseoToolPolicy = this.paseoToolsEnabled
+    assertClaudeTextOnlyConfig(storedConfig, textOnly);
+    const enableTools = this.paseoToolsEnabled && !textOnly;
+    const paseoToolPolicy = enableTools
       ? this.resolvePaseoToolPolicy(storedConfig.provider)
       : { enabled: false };
     const launchConfig = this.applyDaemonAppendSystemPrompt(
@@ -5173,13 +5210,12 @@ export class AgentManager {
         config: storedConfig,
         agentId,
         mcpBaseUrl:
-          this.paseoToolsEnabled && isPaseoToolPolicyEnabled(paseoToolPolicy)
-            ? this.mcpBaseUrl
-            : null,
+          enableTools && isPaseoToolPolicyEnabled(paseoToolPolicy) ? this.mcpBaseUrl : null,
         mcpAuthToken: this.mcpAuthToken,
       }),
     );
-    return { storedConfig, launchConfig, paseoToolPolicy };
+    assertClaudeTextOnlyConfig(launchConfig, textOnly);
+    return { storedConfig, launchConfig, paseoToolPolicy, textOnly };
   }
 
   private applyDaemonAppendSystemPrompt(config: AgentSessionConfig): AgentSessionConfig {
@@ -5245,7 +5281,11 @@ export class AgentManager {
   private resolveProviderLaunchConfig(
     launchConfig: AgentSessionConfig,
     launchContext: AgentLaunchContext,
+    textOnly: boolean,
   ): AgentSessionConfig {
+    assertClaudeTextOnlyConfig(launchConfig, textOnly);
+    if (textOnly && launchContext.paseoTools)
+      throw new Error("Claude text-only has no native tools");
     return launchContext.paseoTools ? stripInternalPaseoMcpServer(launchConfig) : launchConfig;
   }
 

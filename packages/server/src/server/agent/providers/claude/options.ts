@@ -45,6 +45,7 @@ const SandboxFilesystemSchema = z
 // Claude Agent SDK Options, maintained against @anthropic-ai/claude-agent-sdk 0.3.246.
 export const ClaudeProviderOptionsSchema = z
   .object({
+    textOnly: z.literal(true).optional(),
     allowedTools: z.array(z.string()).optional(),
     disallowedTools: z.array(z.string()).optional(),
     additionalDirectories: z.array(z.string()).optional(),
