@@ -4,10 +4,17 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { employeeTools, employeeToolArguments } from "./employee-profile.mjs";
 
 const root = process.env.STUDY_TOOL_DIRECTORY || "/workspace/.study-tools";
-const settingsPath = "/home/node/.codex/study-tools.json";
+const settingsPath = process.env.STUDY_TOOL_SETTINGS || "/home/node/.codex/study-tools.json";
+if (process.env.STUDY_TOOL_SETTINGS && !existsSync(settingsPath)) {
+  throw Error("Configured tool settings are unavailable; no default profile fallback");
+}
 const settings = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, "utf8")) : {};
+if (settings.profile && settings.profile !== "employee-production")
+  throw Error("Unknown tool profile");
+const employee = settings.profile === "employee-production";
 const publicUrl = process.env.STUDY_PUBLIC_URL || settings.publicUrl || "";
 const workflows = Object.fromEntries(
   ["study-documents", "study-analysis", "study-research"].map((name) => [
@@ -15,7 +22,7 @@ const workflows = Object.fromEntries(
     readFileSync(new URL(`./skills/${name}/SKILL.md`, import.meta.url), "utf8"),
   ]),
 );
-const tools = [
+const studyTools = [
   {
     name: "list_files",
     description: "List this student's uploaded and generated files, including IDs and names.",
@@ -59,17 +66,39 @@ const tools = [
     },
   },
 ];
+const tools = employee ? employeeTools(studyTools, settings.mediaReady === true) : studyTools;
+function currentEmployeeAssignment() {
+  const current = JSON.parse(readFileSync(settingsPath, "utf8"));
+  if (
+    current.profile !== "employee-production" ||
+    current.assignment?.job_id !== settings.assignment?.job_id ||
+    current.assignment?.producer_id !== settings.assignment?.producer_id ||
+    typeof current.assignment?.revision !== "string"
+  ) {
+    throw Error("Employee tool owner changed; host reconciliation is required");
+  }
+  return current.assignment;
+}
 async function submit(operation, args) {
   const id = randomUUID();
   const input = join(root, "inbox", id + ".json");
   const output = join(root, "results", id + ".json");
   mkdirSync(join(root, "inbox"), { recursive: true, mode: 0o700 });
   mkdirSync(join(root, "results"), { recursive: true, mode: 0o700 });
-  writeFileSync(input + ".tmp", JSON.stringify({ ...args, operation, files: args.files || [] }), {
-    mode: 0o600,
-  });
+  writeFileSync(
+    input + ".tmp",
+    JSON.stringify({
+      ...args,
+      operation,
+      files: args.files || [],
+      ...(employee ? { assignment: currentEmployeeAssignment() } : {}),
+    }),
+    {
+      mode: 0o600,
+    },
+  );
   renameSync(input + ".tmp", input);
-  const deadline = Date.now() + 120000;
+  const deadline = Date.now() + (employee ? 60000 : 120000);
   while (Date.now() < deadline) {
     if (existsSync(output)) {
       const result = JSON.parse(readFileSync(output, "utf8"));
@@ -79,7 +108,11 @@ async function submit(operation, args) {
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw Error("Study tool timed out. Retry once; do not claim completion.");
+  throw Error(
+    employee
+      ? "Employee tool outcome is uncertain; host reconciliation is required before retry."
+      : "Study tool timed out. Retry once; do not claim completion.",
+  );
 }
 function addLinks(value) {
   if (Array.isArray(value)) return value.map(addLinks);
@@ -92,11 +125,12 @@ function addLinks(value) {
   return result;
 }
 const server = new Server(
-  { name: "lulu-study-tools", version: "1.0.0" },
+  { name: employee ? "employee-production-tools" : "lulu-study-tools", version: "1.0.0" },
   {
     capabilities: { tools: {} },
-    instructions:
-      "Use these tools for this student's uploaded documents, calculations and generated downloads. Read relevant study workflow with read_skill. All computations and files belong only to this student. Tools do not grant local shell, other accounts or desktop access.",
+    instructions: employee
+      ? "Use only this assigned concept's registered source files and bounded tools. Return saved IDs and exact revisions. The trusted host publishes Experiment links. Tools grant no command, provider, spend, send, posting, or access authority."
+      : "Use these tools for this student's uploaded documents, calculations and generated downloads. Read relevant study workflow with read_skill. All computations and files belong only to this student. Tools do not grant local shell, other accounts or desktop access.",
   },
 );
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
@@ -104,8 +138,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     const { name, arguments: args = {} } = request.params;
     if (!tools.some((tool) => tool.name === name)) throw Error("Unknown tool");
-    const result =
-      name === "read_skill" ? workflows[args.name] : addLinks(await submit(name, args));
+    const input = employee ? employeeToolArguments(name, args) : args;
+    const saved = name === "read_skill" ? workflows[input.name] : await submit(name, input);
+    const result = employee ? saved : addLinks(saved);
     if (result === undefined) throw Error("Unknown workflow");
     return {
       content: [

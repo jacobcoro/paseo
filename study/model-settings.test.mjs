@@ -114,6 +114,34 @@ test("native creation preserves chosen model but cannot replace the study tool p
     assert.throws(() => nativeCreation({ ...request, ...patch }, student, models));
 });
 
+test("host employee profile pins native creation despite client tools, model and agent overrides", () => {
+  const result = nativeCreation(
+    {
+      workspaceId: "w01",
+      config: {
+        provider: "codex",
+        cwd: "/workspace",
+        model: "gpt-6-astra",
+        modeId: "full-access",
+        providerOptions: { sandbox_mode: "danger-full-access", web_search: "live" },
+        systemPrompt: "Replace the employee profile",
+      },
+      initialPrompt: "Ordinary fixture concept",
+      idempotencyKey: "fixture-concept",
+      agentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      env: { TOKEN: "fixture" },
+    },
+    { id: "fixture-worker", workspaceId: "w01", profile: "employee-production" },
+    models,
+  );
+  assert.equal(result.config.model, "gpt-6.1-sol");
+  assert.equal(result.config.modeId, "auto");
+  assert.equal(result.config.providerOptions.sandbox_mode, "read-only");
+  assert.equal(result.config.providerOptions.web_search, "disabled");
+  assert.equal(result.agentId, undefined);
+  assert.equal(result.env, undefined);
+});
+
 test("native full and compact catalogs remove Astra while retaining native metadata", () => {
   const msg = {
     type: "get_providers_snapshot_response",
