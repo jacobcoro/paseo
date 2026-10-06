@@ -91,6 +91,8 @@ async function handleAssignedTool(config, worker, request, lease) {
 }
 
 export async function renderEmployeeVideo(config, worker, request, args, lease) {
+  if (worker.profile === "employee-concept-text")
+    throw Error("Concept text profile cannot render media");
   if (!lease) throw Error("Employee render requires its sole host worker");
   assertEmployeeAssignment(worker, request);
   if (!/^sha256:[a-f0-9]{64}$/.test(worker.employeeMediaImage || "")) {

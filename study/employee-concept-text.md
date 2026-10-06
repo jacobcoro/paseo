@@ -56,9 +56,9 @@ The concept profile cannot start the employee tool owner. It exposes no tools,
 MCP, media, shell or container handler. Ordinary students and the Codex profile
 keep their existing paths. The existing tool worker explicitly rejects this
 profile before ordinary tool, executor or worker initialization. The separate
-exported `employee-tools.mjs:renderEmployeeVideo` host helper still trusts its
-caller-supplied lease; it is not routed here. Root must review that named closure
-gap rather than infer a zero-tool runtime from these guards.
+exported `employee-tools.mjs:renderEmployeeVideo` host helper rejects this profile
+before assignment, configuration, files or the host storage-policy subprocess.
+These source denials do not prove a zero-tool runtime.
 Alternate native/study UI and daemon entrypoints are
 not repaired here and must remain closed independently.
 
