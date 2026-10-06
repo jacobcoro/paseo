@@ -124,6 +124,28 @@ test("employee MCP inventory exposes scoped production tools and denies command,
   }
 });
 
+test("missing configured employee settings cannot advertise the default Python tool profile", async () => {
+  const scratch = join(homedir(), ".local", "state", "paseo-employee-tests");
+  mkdirSync(scratch, { recursive: true, mode: 0o700 });
+  const root = mkdtempSync(join(scratch, "missing-settings-"));
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [resolve("study/tool-server.mjs")],
+    stderr: "pipe",
+    env: { PATH: process.env.PATH, STUDY_TOOL_SETTINGS: join(root, "missing.json") },
+  });
+  const client = new Client(
+    { name: "employee-missing-settings", version: "1" },
+    { capabilities: {} },
+  );
+  try {
+    await assert.rejects(client.connect(transport));
+  } finally {
+    await client.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("employee host queue checks the exact job revision on every file tool and rejects revocation", async () => {
   const scratch = join(homedir(), ".local", "state", "paseo-employee-tests");
   mkdirSync(scratch, { recursive: true, mode: 0o700 });
@@ -178,9 +200,36 @@ test("employee host queue checks the exact job revision on every file tool and r
     assert.equal(JSON.parse(read.content[0].text).text, "Approved fixture packet.");
     const foreign = await client.callTool({ name: "read_file", arguments: { id: other.id } });
     assert.equal(foreign.isError, true);
+    const first = await client.callTool({
+      name: "write_text",
+      arguments: { name: "concept.txt", text: "Unchanged fixture text." },
+    });
     writeFileSync(controlFile, JSON.stringify({ ...control, revision: "fixture-r2" }));
     const stale = await client.callTool({ name: "read_file", arguments: { id: own.id } });
     assert.equal(stale.isError, true);
+    const next = { ...assignment, revision: "fixture-r2" };
+    writeFileSync(settings, JSON.stringify({ profile: "employee-production", assignment: next }));
+    const revised = await client.callTool({
+      name: "write_text",
+      arguments: { name: "concept.txt", text: "Unchanged fixture text." },
+    });
+    assert.equal(revised.isError, undefined);
+    const oldArtifact = JSON.parse(first.content[0].text);
+    const newArtifact = JSON.parse(revised.content[0].text);
+    assert.equal(oldArtifact.revision, "fixture-r1");
+    assert.equal(newArtifact.revision, "fixture-r2");
+    assert.notEqual(oldArtifact.id, newArtifact.id);
+    assert.equal(newArtifact.producer_id, assignment.producer_id);
+    writeFileSync(
+      settings,
+      JSON.stringify({
+        profile: "employee-production",
+        assignment: { ...next, producer_id: "another-producer" },
+      }),
+    );
+    const changedOwner = await client.callTool({ name: "list_files", arguments: {} });
+    assert.equal(changedOwner.isError, true);
+    writeFileSync(settings, JSON.stringify({ profile: "employee-production", assignment: next }));
     writeFileSync(controlFile, JSON.stringify({ ...control, active: false }));
     const revoked = await client.callTool({ name: "list_files", arguments: {} });
     assert.equal(revoked.isError, true);

@@ -8,6 +8,9 @@ import { employeeTools, employeeToolArguments } from "./employee-profile.mjs";
 
 const root = process.env.STUDY_TOOL_DIRECTORY || "/workspace/.study-tools";
 const settingsPath = process.env.STUDY_TOOL_SETTINGS || "/home/node/.codex/study-tools.json";
+if (process.env.STUDY_TOOL_SETTINGS && !existsSync(settingsPath)) {
+  throw Error("Configured tool settings are unavailable; no default profile fallback");
+}
 const settings = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, "utf8")) : {};
 if (settings.profile && settings.profile !== "employee-production")
   throw Error("Unknown tool profile");
@@ -64,6 +67,18 @@ const studyTools = [
   },
 ];
 const tools = employee ? employeeTools(studyTools, settings.mediaReady === true) : studyTools;
+function currentEmployeeAssignment() {
+  const current = JSON.parse(readFileSync(settingsPath, "utf8"));
+  if (
+    current.profile !== "employee-production" ||
+    current.assignment?.job_id !== settings.assignment?.job_id ||
+    current.assignment?.producer_id !== settings.assignment?.producer_id ||
+    typeof current.assignment?.revision !== "string"
+  ) {
+    throw Error("Employee tool owner changed; host reconciliation is required");
+  }
+  return current.assignment;
+}
 async function submit(operation, args) {
   const id = randomUUID();
   const input = join(root, "inbox", id + ".json");
@@ -76,7 +91,7 @@ async function submit(operation, args) {
       ...args,
       operation,
       files: args.files || [],
-      ...(employee ? { assignment: settings.assignment } : {}),
+      ...(employee ? { assignment: currentEmployeeAssignment() } : {}),
     }),
     {
       mode: 0o600,

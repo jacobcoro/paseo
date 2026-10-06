@@ -13,6 +13,10 @@ when the host marks the separately verified media executor available.
 Every queued employee tool includes the immutable host job/producer/revision.
 The private control file must match that binding, be active and unexpired both
 before and after execution. It must reside outside every executor mount.
+The server rereads the private host revision without changing its pinned owner.
+Old queued calls fail after an advance. Text and media IDs include the revision,
+so unchanged content does not reuse an older revision's receipt. Missing explicit
+settings fail instead of loading the default student tool profile.
 File IDs resolve only in this concept's registry. General Python, paths, URLs,
 commands, providers, sends, spending, posting and grants are unavailable.
 

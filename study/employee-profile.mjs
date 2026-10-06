@@ -6,7 +6,7 @@ const schemas = {
   list_files: z.object({}).strict(),
   read_file: z.object({ id: fileId }).strict(),
   write_text: z
-    .object({ name: z.string().min(1).max(180), text: z.string().min(1).max(60000) })
+    .object({ name: z.string().min(1).max(100), text: z.string().min(1).max(60000) })
     .strict(),
   render_video: z
     .object({ files: z.array(fileId).min(1).max(4), duration_seconds: z.number().min(1).max(20) })

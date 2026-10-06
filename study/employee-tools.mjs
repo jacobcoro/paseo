@@ -95,7 +95,19 @@ export async function handleEmployeeTool(config, worker, request) {
     const text = readFileSync(file.path, "utf8");
     result = { text: text.slice(0, 60000), truncated: text.length > 60000 };
   } else if (operation === "write_text") {
-    result = registerDocument(config, worker, args.name, Buffer.from(args.text), "output");
+    const prefix = createHash("sha256").update(request.assignment.revision).digest("hex");
+    result = registerDocument(
+      config,
+      worker,
+      prefix + "-" + args.name,
+      Buffer.from(args.text),
+      "output",
+      {
+        job_id: request.assignment.job_id,
+        producer_id: request.assignment.producer_id,
+        revision: request.assignment.revision,
+      },
+    );
   } else result = await renderEmployeeVideo(config, worker, request, args);
   assertEmployeeAssignment(worker, request);
   return result;

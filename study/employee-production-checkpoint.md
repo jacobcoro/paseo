@@ -14,6 +14,9 @@ passed twelve confinement/resource checks without a provider or external send.
 
 1. Done: actual stdio MCP inventory, command/send/spend denials, strict
    arguments, exact host control/revision/expiry/revocation on every call.
+   Same producer rereads host revision each call; old queued revisions fail.
+   Identical text on successive revisions has distinct tagged artifact IDs.
+   Missing configured settings fail instead of advertising default Python tools.
 2. Done: employee-only native creation ignores client model/tool/agent overrides.
 3. Source ready: bounded approved-MP4 renderer reuses existing disposable
    computation. One worker per employee runtime; default student behavior stays.
@@ -30,8 +33,8 @@ passed twelve confinement/resource checks without a provider or external send.
    receiver and assignment store through real MCP to a saved four-second silent
    720x1280 MP4. Eleven actual Docker resource/mount checks passed. No provider
    turn or external message occurred. Native built-in proof is still missing.
-7. Done: twelve focused tests, formatting, scoped lint and whole-workspace
-   typecheck. Final twelve narrow tests passed on the source commit.
+7. Done: focused tests, formatting, scoped lint and whole-workspace typecheck.
+   Final thirteen narrow tests cover the revised iteration and fallback checks.
 8. Pending: parent exact-source review, distinct cheap PR shepherd, live proof.
 
 Owned changes: documents, native-controls, model-settings tests, tool-server,
