@@ -123,7 +123,11 @@ test("host employee profile pins native creation despite client tools, model and
         cwd: "/workspace",
         model: "gpt-6-astra",
         modeId: "full-access",
-        providerOptions: { sandbox_mode: "danger-full-access", web_search: "live" },
+        providerOptions: {
+          default_permissions: ":unrestricted",
+          sandbox_mode: "danger-full-access",
+          web_search: "live",
+        },
         systemPrompt: "Replace the employee profile",
       },
       initialPrompt: "Ordinary fixture concept",
@@ -135,8 +139,9 @@ test("host employee profile pins native creation despite client tools, model and
     models,
   );
   assert.equal(result.config.model, "gpt-6.1-sol");
-  assert.equal(result.config.modeId, "auto");
-  assert.equal(result.config.providerOptions.sandbox_mode, "read-only");
+  assert.equal(result.config.modeId, undefined);
+  assert.equal(result.config.providerOptions.sandbox_mode, undefined);
+  assert.equal(result.config.providerOptions.default_permissions, "employee-production");
   assert.equal(result.config.providerOptions.web_search, "disabled");
   assert.equal(result.agentId, undefined);
   assert.equal(result.env, undefined);

@@ -1,51 +1,35 @@
-# Employee production runtime checkpoint
+# Employee native filesystem checkpoint
 
-Updated: 2026-10-06T11:03:00Z.
+Updated: 2026-10-06T11:38:00Z.
+Outcome: host-pinned native filesystem permission profile stays across creation,
+resume and later turns. First Mate owns security review and runtime activation.
+Branch: `session/20261006-employee-native-filesystem`.
+Base: `23dac9ef9bd5e6e0eabf0d9a0e759b194222fcea` (merged runtime PR 8).
+Phone Farming PR 2054 and Hermes PR 90 are merged. All source work is held OFF.
 
-Outcome: exact assigned concept, producer and revision use scoped tools and
-credential-free computation. First Mate owns security review and activation.
-This source is not an activated or proved native production broker.
+1. Done: existing receiver/store/MCP/confined media fixture produced a silent
+   four-second 720x1280 MP4 in 3.65 seconds. Eleven Docker boundary checks passed.
+   This mechanical proof had no native producer, credentials or external send.
+2. Source follow-up authorized: First Mate approved named profile forwarding,
+   legacy override refusal, lifecycle preservation, employee reconfiguration
+   denial and meaningful tests. The earlier source-only merges stay separate.
+3. Done in source: existing Codex adapter accepts a named permission option,
+   rejects legacy modes/options and host config changes to that binding.
+   Employee creation pins its profile; employee reconfiguration is denied.
+4. Tests: old source failed meaningful lifecycle and employee policy checks.
+   The changed native adapter suite passes all 180 cases in 5.82 seconds; nine
+   policy/model-setting cases pass. Scoped formatting and lint pass. Commit-hook
+   typecheck remains the required final gate.
+5. Pending: exact source review and distinct cheap source PR shepherd.
+6. Runtime held: native 0.160 source supports granular path deny and sandboxed
+   file helpers. Actual deny precedence and broker authentication separation
+   remain unproved. No safe pre-turn built-in registry API was found.
+7. Before any broker: provide First Mate one concrete fake-canary-only native
+   engine/RPC harness, config, mounts, resource bounds and cleanup plan.
+   No real authentication or subscription turn is authorized by this source work.
 
-Branch: `session/20261006-employee-production-runtime`.
-Base HEAD: `e6007f03aec361909d906ee7a040a85a766dcbff`.
-Phone Farming intake HEAD: `6a017f9f`; held PR 2054, distinct cheap shepherd.
-Its 45 full local checks passed. Earlier noncreative computation fixture
-passed twelve confinement/resource checks without a provider or external send.
-
-1. Done: actual stdio MCP inventory, command/send/spend denials, strict
-   arguments, exact host control/revision/expiry/revocation on every call.
-   Same producer rereads host revision each call; old queued revisions fail.
-   Identical text on successive revisions has distinct tagged artifact IDs.
-   Missing configured settings fail instead of advertising default Python tools.
-2. Done: employee-only native creation ignores client model/tool/agent overrides.
-3. Source ready: bounded approved-MP4 renderer reuses existing disposable
-   computation. One worker per employee runtime; default student behavior stays.
-4. Source ready: exact-owner host revoke first persists denial, then cancels
-   only computation containers with all three matching ownership labels.
-5. Source candidate: clean broker config and startup model metadata disable
-   native shell, view-image, apply-patch, search and delegation. Actual installed
-   native inventory/denial and submit/cancel proof are still missing.
-6. Failed: one approved image build stopped at Snap CLI context validation,
-   before Dockerfile stage. Parent renewed one stdin-tar-only correction. It
-   built in 45.79 seconds; pre-apt assertions verified 1 CPU/1 GiB/no swap.
-   Final image uses nonroot user. Builder PID limit remains uncapped.
-   The separate actual employee fixture then completed in 3.65 seconds: existing
-   receiver and assignment store through real MCP to a saved four-second silent
-   720x1280 MP4. Eleven actual Docker resource/mount checks passed. No provider
-   turn or external message occurred. Native built-in proof is still missing.
-7. Done: focused tests, formatting, scoped lint and whole-workspace typecheck.
-   Final thirteen narrow tests cover the revised iteration and fallback checks.
-8. Pending: parent exact-source review, distinct cheap PR shepherd, live proof.
-
-Owned changes: documents, native-controls, model-settings tests, tool-server,
-tool-server tests, tool-worker, employee-profile, employee-tools, media Dockerfile,
-employee-production instructions and this checkpoint.
-
-Private runtime/build evidence stays outside this repository. Authentication is
-trusted broker custody only; it never mounts into computation. No student
-container, gateway, provider, daemon, live config, grant or external message was
-started or changed. The benchmark producer remains untouched.
-
-Next: collect final narrow tests, commit owned source, return exact source and
-runtime blockers to First Mate. Retain one bounded pull wait for the separately proposed native
-proof boundary review. Never infer readiness from prompt text or callbacks.
+Owned files: Codex options, native adapter and its existing tests; employee
+profile, model-settings tests, policy and policy tests; this checkpoint and
+existing employee production documentation. Ordinary student behavior stays.
+Next: finish scoped checks, prepare exact fake-canary harness for review,
+commit source and give a distinct shepherd one held source PR assignment.

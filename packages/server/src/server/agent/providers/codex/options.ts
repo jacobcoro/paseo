@@ -38,6 +38,12 @@ const NetworkPolicySchema = z
 export const CodexProviderOptionsSchema = z
   .object({
     approval_policy: ApprovalPolicySchema.optional(),
+    default_permissions: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[a-zA-Z0-9:_-]+$/)
+      .optional(),
     sandbox_mode: z.enum(["read-only", "workspace-write", "danger-full-access"]).optional(),
     sandbox_workspace_write: z
       .object({
@@ -57,7 +63,19 @@ export const CodexProviderOptionsSchema = z
       .strict()
       .optional(),
   })
-  .strict() satisfies z.ZodType<ProviderOptions>;
+  .strict()
+  .superRefine((options, context) => {
+    if (
+      options.default_permissions !== undefined &&
+      (options.sandbox_mode !== undefined || options.sandbox_workspace_write !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["default_permissions"],
+        message: "Named permission profiles cannot be combined with legacy sandbox options",
+      });
+    }
+  }) satisfies z.ZodType<ProviderOptions>;
 
 export type CodexProviderOptions = z.infer<typeof CodexProviderOptionsSchema>;
 

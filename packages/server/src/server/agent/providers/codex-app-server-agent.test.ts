@@ -152,7 +152,11 @@ function createConfig(overrides: Partial<AgentSessionConfig> = {}): AgentSession
 
 function createSession(
   configOverrides: Partial<AgentSessionConfig> = {},
-  options: { goalsEnabled?: boolean; autoReviewEnabled?: boolean } = {},
+  options: {
+    goalsEnabled?: boolean;
+    autoReviewEnabled?: boolean;
+    deps?: ConstructorParameters<typeof CodexAppServerAgentSession>[4];
+  } = {},
 ): CodexTestSession {
   const session = new CodexAppServerAgentSession(
     createConfig(configOverrides),
@@ -161,7 +165,7 @@ function createSession(
     () => {
       throw new Error("Test session cannot spawn Codex app-server");
     },
-    {},
+    options.deps ?? {},
     false,
     options.goalsEnabled === true,
     options.autoReviewEnabled === true,
@@ -1040,6 +1044,88 @@ describe("Codex app-server provider", () => {
         approvalsReviewer: "auto_review",
       }),
     );
+  });
+
+  test("named filesystem profile survives native start resume and turn without legacy policy", async () => {
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const session = createSession({
+      modeId: undefined,
+      thinkingOptionId: "medium",
+      providerOptions: { default_permissions: "employee-production", approval_policy: "never" },
+    });
+    session.currentThreadId = null;
+    session.activeForegroundTurnId = null;
+    session.client = createStub<CodexClientLike>({
+      request: async (method: string, params: unknown) => {
+        requests.push({ method, params });
+        if (method === "thread/start") return { thread: { id: "named-thread" } };
+        if (method === "thread/loaded/list") return { data: [] };
+        if (method === "thread/resume" || method === "turn/start") return {};
+        throw new Error(`Unexpected request: ${method}`);
+      },
+    });
+    await session.startTurn("first assigned concept");
+    session.activeForegroundTurnId = null;
+    await session.startTurn("same assigned concept revision");
+    for (const method of ["thread/start", "thread/resume", "turn/start"]) {
+      const calls = requests.filter((record) => record.method === method);
+      expect(calls.length).toBeGreaterThan(0);
+      for (const call of calls) {
+        expect(call.params).toMatchObject({
+          config: { default_permissions: "employee-production", approval_policy: "never" },
+        });
+        expect(call.params).not.toHaveProperty("sandbox");
+        expect(call.params).not.toHaveProperty("sandboxPolicy");
+        expect(call.params).not.toHaveProperty("config.sandbox_mode");
+      }
+    }
+    await expect(session.setMode("full-access")).rejects.toThrow(/named.*permission/i);
+  });
+
+  test("named filesystem profile cannot be overridden by host provider config at dispatch", async () => {
+    for (const override of [
+      { default_permissions: ":unrestricted" },
+      { sandbox_mode: "danger-full-access" },
+      { sandbox_workspace_write: { network_access: true } },
+    ]) {
+      const customCodexConfig = { model_provider: "fixture", model_providers: {}, ...override };
+      const session = createSession(
+        {
+          modeId: undefined,
+          providerOptions: { default_permissions: "employee-production" },
+        },
+        { deps: { customCodexConfig } },
+      );
+      session.activeForegroundTurnId = null;
+      const request = vi.fn(async (method: string) => {
+        if (method === "thread/loaded/list") return { data: ["test-thread"] };
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      session.client = createStub<CodexClientLike>({ request });
+      await expect(session.startTurn("assigned concept")).rejects.toThrow(/named.*permission/i);
+      expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
+    }
+  });
+
+  test("named filesystem profile rejects legacy mode and sandbox combinations", () => {
+    const profile = { default_permissions: "employee-production" };
+    for (const modeId of ["auto", "read-only", "full-access"]) {
+      expect(() => createSession({ modeId, providerOptions: profile })).toThrow(
+        /named.*permission/i,
+      );
+    }
+    for (const extra of [
+      { sandbox_mode: "read-only" },
+      { sandbox_mode: "danger-full-access" },
+      { sandbox_workspace_write: {} },
+    ]) {
+      expect(() =>
+        createSession({ modeId: undefined, providerOptions: { ...profile, ...extra } }),
+      ).toThrow(/named.*permission|default_permissions/i);
+    }
+    expect(() =>
+      createSession({ modeId: undefined, providerOptions: { default_permissions: "" } }),
+    ).toThrow();
   });
 
   test("omitted mode preserves Codex resolved approval and sandbox config", async () => {
