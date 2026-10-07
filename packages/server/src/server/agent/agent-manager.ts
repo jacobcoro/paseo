@@ -1,3 +1,5 @@
+import { selectConceptCommittedCompletion } from "./concept-committed-completion.js";
+import type { ConceptCompletionMetadata } from "./providers/claude/concept-completion.js";
 import {
   assertClaudeTextOnlyConfig,
   assertClaudeTextOnlyTransition,
@@ -720,6 +722,7 @@ function detachedAgentLabelPatch(labels: Record<string, string>): AgentLabelPatc
 }
 
 export class AgentManager {
+  readonly conceptOwnerGeneration = randomUUID();
   private readonly pluginLifecycle: PluginLifecycle | undefined;
   private readonly clients = new Map<AgentProvider, AgentClient>();
   private readonly providerEnabled = new Map<AgentProvider, boolean>();
@@ -1173,6 +1176,59 @@ export class AgentManager {
   getAgent(id: string): ManagedAgent | null {
     const agent = this.agents.get(id);
     return agent ? { ...agent } : null;
+  }
+
+  // Private in-process reader seam. Not an RPC, UI, tool or session list.
+  async observeConceptAgent(agentId: string) {
+    const agent = this.agents.get(agentId);
+    if (!agent?.session || !assertClaudeTextOnlyConfig(agent.config)) return null;
+    const session = agent.session;
+    const runtimeInfo = await session.getRuntimeInfo();
+    if (this.agents.get(agentId)?.session !== session) return null;
+    const native = runtimeInfo?.extra?.conceptText as
+      | { completion?: ConceptCompletionMetadata }
+      | undefined;
+    let committedCompletion = null;
+    if (native?.completion && this.durableTimelineStore) {
+      const epoch = this.timelineStore.getEpoch(agentId);
+      const rows = await this.durableTimelineStore.getCommittedRows(agentId);
+      const current = await session.getRuntimeInfo();
+      if (
+        this.agents.get(agentId)?.session !== session ||
+        this.timelineStore.getEpoch(agentId) !== epoch ||
+        JSON.stringify((current?.extra?.conceptText as { completion?: unknown })?.completion) !==
+          JSON.stringify(native.completion)
+      )
+        return null;
+      committedCompletion = selectConceptCommittedCompletion(
+        rows,
+        this.timelineStore.getRows(agentId),
+        epoch,
+        native.completion,
+      );
+    }
+    return structuredClone({
+      id: agent.id,
+      provider: agent.provider,
+      cwd: agent.cwd,
+      workspaceId: agent.workspaceId,
+      internal: agent.internal === true,
+      visible: agent.internal !== true,
+      status: agent.lifecycle,
+      manager_generation: this.conceptOwnerGeneration,
+      config: {
+        provider: agent.config.provider,
+        cwd: agent.config.cwd,
+        model: agent.config.model,
+        thinkingOptionId: agent.config.thinkingOptionId,
+        modeId: agent.config.modeId,
+        providerOptions: agent.config.providerOptions,
+      },
+      runtimeInfo,
+      native_session_id: session.id,
+      committed_completion: committedCompletion,
+      observed_ms: Date.now(),
+    });
   }
 
   async waitForAgentClose(agentId: string): Promise<void> {

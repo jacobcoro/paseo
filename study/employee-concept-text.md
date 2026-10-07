@@ -75,3 +75,106 @@ Focused tests require a private `EMPLOYEE_CONCEPT_TEST_ROOT`. They use fake
 clients, labelled synthetic observations and separate synthetic Node processes.
 Their passes prove source contracts only. Root owns wider checks, publication,
 adoption, proof collection and all real jobs.
+
+## Current host-only observation reader
+
+`employee-concept-readers.mjs` is one trusted reader core, not an actor API.
+Its fixed target, agent, private paths, source files and Root authority must come
+from reviewed host configuration. It reads only the exact loaded storage record
+(`getCurrent`, without loading a registry) and current manager/provider projection.
+Missing records or observations keep creation, admission, resume, submit and cancel
+closed. No configuration, registry, approval, credential or job is created here.
+
+Register these logical owners only in a separately approved runtime phase:
+
+| Scope                      | Actual owner                                                   |
+| -------------------------- | -------------------------------------------------------------- |
+| `job_id`, `revision`       | Root-owned exact job registry/control record                   |
+| `producer_id`, `worker_id` | Same actual visible managed AgentSession ID; no executor PID   |
+| `runtime_id`               | Registered private instance owner, matched to its exact target |
+| `runtime_generation`       | Current AgentManager constructor incarnation                   |
+| `broker_id`                | Registered trusted host reader/broker owner                    |
+| `broker_generation`        | Current lasting daemon-owned observer incarnation              |
+| `worker_generation`        | Current sealed ClaudeAgentSession constructor incarnation      |
+
+Native Claude ID, SDK query incarnation and owned child incarnation are additional
+observations. Before actual spawn/init, native identity and catalogs stay unknown.
+An intended managed UUID or no-prompt creation does not supply them. Actual input
+delivery remains unsettled until a same-query user echo and terminal result.
+Manager timeout cancellation or a provider's synthetic canceled event supplies
+no such result. Exit, query replacement or native drift invalidate observations.
+An idle persistent CLI is permitted; no process absence is asserted.
+
+The adapter returns the existing host/dispatch callback schemas. Independent
+Root/System review records must identify their provenance, authority, receipt,
+current time, exact scope, manager/session/query/child/native/model/PID association,
+source hashes and required checks. Root approves the loaded closure, custody,
+caller path, ingress barrier and workspace readiness. The adapter compares actual
+catalogs, identities and records; source hashes and booleans alone certify none.
+Stop also reads inactive control plus matching tombstone/revoke nonce and absence
+of the owned submit lease. Expired or revoked submission approval is not read for
+withdrawal observations. Exact native settlement must match the pre-cancel stamp.
+
+The future private instance must retain the mandatory trusted daemon Jev creation
+plugin and its capacity refusal. Native Claude plugins remain disabled. Daemon
+plugins and native plugins have different owners; disabling all daemon plugins
+would remove the guard. Actors get only strict assigned Lark/page handlers, with
+no daemon/UI/SDK/network endpoint. Root must independently verify loopback-only
+host ingress and disabled relay/UI/browser/MCP/terminal layers before admission.
+The existing manager stream/steer/refresh routes are not made safe by this reader;
+missing current closed-ingress proof denies. Private modes or a shared UID do not
+prove filesystem isolation. No ordinary/student/Codex execution path changes.
+
+Loaded release/SDK/CLI/config custody and OS PID birth/argv still require independent
+matching after separately approved setup and bootstrap. Fresh logical registration
+and independent review writers are also absent. Pending creation can remain held
+until its real managed generation is registered; do not prefill wanted generations.
+All fake records/tests here are SOURCE_ONLY, never actual runtime approval.
+
+`packages/server/src/server/bootstrap.ts` wires the passive handoff to those same
+actual manager/storage objects and its existing start/stop lifecycle. It is OFF
+unless the trusted host sets `PASEO_CONCEPT_OBSERVATION_CONFIG` to
+`<sha256>:<absolute-private-config-file>`. The bounded host JSON fixes its instance
+target, private output directory, and at most ten exact agent/workspace/reader
+configurations; an empty selection is valid. No actor selects paths or IDs here.
+Only regular owner-private files and canonical private directories outside every
+selected actor workspace are accepted. Unknown IDs receive no job frame.
+
+The exclusive writer never steals a stale observer lock. It publishes safe
+`live-owner.json` and hashed-ID frames atomically, subscribes to selected events,
+and refreshes at most every two seconds. Pending storage writes or changed records
+emit unknown; stop invalidates known frames before removing only its own writer
+lock. Refreshes expiring after four seconds hold. These frames contain native
+metadata, no prompts, responses, reasoning, auth or environment. Their private
+modes and logical generation values still cannot prove kernel confinement or PID
+birth. A passive read that never resolves cannot publish after shutdown.
+
+`employee-concept-boundary.mjs` exports the host-only callbacks for the existing
+separate Hermes loader. It reads that fixed pinned configuration and fresh private
+frames into the same core, retaining the actual lasting observer across one-shot
+facades. It adds no network, public RPC, SDK route, launcher or second manager.
+Root must separately provision this configuration/output, register the observed
+owners and provide independent current evidence before adoption. This source
+creates no actual runtime enrollment or approved proof.
+
+`observeConceptCompletion(binding, { clientMessageId, turnId })` observes success
+only for the single foreground request in an actual query incarnation. It requires
+that request's verified native SDK user echo, current successful result UUID with
+`is_error: false`, and the exact committed canonical user/final entries in a real
+durable store. The restricted provider emits the successful result's visible text
+under its actual result UUID and provider turn, with `sdk_success_result`
+provenance in observation metadata. Ordinary session rendering stays unchanged.
+
+Completion frames contain request/input/result/final IDs, text SHA-256, actual
+owner generations and canonical epoch/cursors, never final text. The callback
+rechecks current binding, independent review, quiet state and committed metadata.
+Failed, canceled, replayed, sidechain, missing-echo, uncommitted or drifting data
+stay unknown. Stop-only settlement does not prove creative success. Steering,
+interleaving and a second foreground request in the same persistent query cannot
+qualify in this slice; a wanted ID or identical text cannot resolve old-result
+ambiguity. Query replacement, if separately authorized, requires fresh matching
+registration and proof. This source does not initiate it.
+
+No actual owner, current loaded source, custody, ingress, PID birth, isolation,
+SDK extra-argument interpretation, approval or configured runtime is verified by
+these offline tests. Root owns adoption, enrollment and every live proof decision.

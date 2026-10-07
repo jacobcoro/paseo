@@ -25,6 +25,7 @@ export interface ClaudeQueryContext {
   queryFactory?: ClaudeQueryFactory;
   /** Called with the spawned child process so the caller can tree-kill it on close. */
   onChildProcess?: (child: ChildProcess) => void;
+  onConceptSpawn?: (child: ChildProcess, command: string, args: string[]) => void;
 }
 
 function isChildProcessWithStreams(child: ChildProcess): child is ChildProcessWithoutNullStreams {
@@ -98,6 +99,7 @@ function applyRuntimeSettingsToClaudeOptions(
         // The command is always a resolved binary path, so shell routing is unnecessary.
         shell: false,
       });
+      if (context.textOnly) context.onConceptSpawn?.(child, command, args);
       onChildProcess?.(child);
       if (typeof options.stderr === "function") {
         child.stderr?.on("data", (chunk: Buffer | string) => {

@@ -1,3 +1,4 @@
+import { ConceptObservation } from "./concept-observation.js";
 import { validateProviderOptions } from "../../provider-options.js";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -2059,6 +2060,9 @@ class ClaudeContextUsageState {
 
 class ClaudeAgentSession implements AgentSession {
   private readonly textOnly: boolean;
+  private conceptPumpedMessage: SDKMessage | null = null;
+  private readonly conceptObservation: ConceptObservation | null;
+  private conceptInitMessage: SDKSystemMessage | null = null;
   readonly provider = "claude" as const;
   readonly capabilities = CLAUDE_CAPABILITIES;
 
@@ -2150,6 +2154,7 @@ class ClaudeAgentSession implements AgentSession {
     this.config = config;
     assertClaudeThinkingOptionSupported(config.model, config.thinkingOptionId);
     this.textOnly = assertClaudeTextOnlyConfig(config);
+    this.conceptObservation = this.textOnly ? new ConceptObservation() : null;
     this.launchEnv = options.launchEnv;
     this.agentId = options.agentId;
     this.defaults = options.defaults;
@@ -2203,6 +2208,25 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
+    if (this.conceptObservation) {
+      const observed = this.conceptObservation.snapshot();
+      return {
+        provider: "claude",
+        sessionId: (observed.init?.native_session_id as string | undefined) ?? null,
+        model: (observed.init?.model as string | undefined) ?? null,
+        modeId: (observed.init?.mode as string | undefined) ?? null,
+        extra: {
+          conceptText: {
+            ...observed,
+            foreground_active: this.activeForegroundTurnId !== null,
+            autonomous_active: this.autonomousTurn !== null,
+            permissions: this.pendingPermissions.size,
+            queued_steers: this.queuedSteerUuids.size,
+            tool_calls: this.toolUseCache.size,
+          },
+        },
+      };
+    }
     if (this.cachedRuntimeInfo) {
       return { ...this.cachedRuntimeInfo };
     }
@@ -2316,6 +2340,7 @@ class ClaudeAgentSession implements AgentSession {
       this.activeForegroundInput = this.input;
       this.startQueryPump();
       this.input.push(sdkMessage);
+      this.conceptObservation?.delivered(sdkMessage.uuid, options?.clientMessageId, turnId);
       setTimeout(() => {
         if (this.activeForegroundTurnId === turnId) {
           this.emitSubmittedUserMessage(sdkMessage, turnId, options?.clientMessageId);
@@ -2377,6 +2402,7 @@ class ClaudeAgentSession implements AgentSession {
     }
     try {
       input.push(message);
+      this.conceptObservation?.delivered(message.uuid);
       if (clearPendingPermissions) {
         this.denyPendingPermissionsSupersededBySteer();
       }
@@ -2717,6 +2743,7 @@ class ClaudeAgentSession implements AgentSession {
       "provider.claude.session_close.start",
     );
     this.closed = true;
+    this.conceptObservation?.invalidate();
     this.rejectAllPendingPermissions(new Error("Claude session closed"));
     this.cancelCurrentTurn?.();
     this.subscribers.clear();
@@ -3154,6 +3181,7 @@ class ClaudeAgentSession implements AgentSession {
       const oldInput = this.input;
       // Null out query/input BEFORE awaiting the old iterator's return so the
       // old pump sees this.query !== activeQuery and skips failActiveTurns.
+      this.conceptObservation?.invalidate();
       this.query = null;
       this.input = null;
       this.queryPumpPromise = null;
@@ -3191,6 +3219,7 @@ class ClaudeAgentSession implements AgentSession {
     const options = await this.buildOptions();
     this.logger.debug({ options: summarizeClaudeOptionsForLog(options) }, "claude query");
     this.input = input;
+    const incarnation = this.conceptObservation?.beginQuery();
     this.query = claudeQuery(
       { prompt: input.iterable, options },
       {
@@ -3198,7 +3227,11 @@ class ClaudeAgentSession implements AgentSession {
         launchEnv: this.launchEnv,
         textOnly: assertClaudeTextOnlyConfig(this.config, this.textOnly),
         queryFactory: this.queryFactory,
+        onConceptSpawn: (child, command, args) => {
+          if (incarnation) this.conceptObservation?.spawned(incarnation, child, command, args);
+        },
         onChildProcess: (child) => {
+          if (incarnation && !this.conceptObservation?.isCurrent(incarnation)) return;
           this.childProcess = child;
           child.once("exit", (code, signal) => this.handleRuntimeExit(child, code, signal));
         },
@@ -3656,6 +3689,7 @@ class ClaudeAgentSession implements AgentSession {
     if (event.type === "turn_failed" || event.type === "turn_canceled") {
       this.flushPendingToolCalls();
     }
+    if (event.type !== "turn_completed") this.conceptObservation?.completion.invalidate();
     this.notifySubscribers(event);
     this.activeForegroundTurnId = null;
     this.activeForegroundQuery = null;
@@ -3669,6 +3703,8 @@ class ClaudeAgentSession implements AgentSession {
   private dispatchEvents(events: AgentStreamEvent[]): void {
     let terminalSeen = false;
     for (const event of events) {
+      if (event.type === "turn_failed" || event.type === "turn_canceled")
+        this.conceptObservation?.completion.invalidate();
       this.notifySubscribers(event);
       terminalSeen ||= this.isTerminalTurnEvent(event);
     }
@@ -3745,6 +3781,7 @@ class ClaudeAgentSession implements AgentSession {
     if (this.closed || this.childProcess !== child) {
       return;
     }
+    this.conceptObservation?.invalidate();
     this.childProcess = null;
     this.logger.warn(
       { agentId: this.agentId, pid: child.pid, code, signal },
@@ -3802,6 +3839,10 @@ class ClaudeAgentSession implements AgentSession {
     });
   }
 
+  private conceptQueryIncarnation() {
+    return this.conceptObservation?.snapshot().query_incarnation;
+  }
+
   private async runQueryPump(): Promise<void> {
     let activeQuery: Query;
     try {
@@ -3837,13 +3878,28 @@ class ClaudeAgentSession implements AgentSession {
         "provider.claude.raw_event",
       );
     };
+    const incarnation = this.conceptQueryIncarnation();
     const handlePumpedMessage = async (message: SDKMessage): Promise<boolean> => {
+      if (this.textOnly && this.query !== activeQuery) return true;
+      if (incarnation)
+        this.conceptObservation?.message(
+          incarnation,
+          message as unknown as Record<string, unknown>,
+        );
       logRawMessage(message);
       consecutiveInterruptAbortRecoveries = 0;
       if (await this.handleMissingResumedConversation(message, activeQuery)) {
         return true;
       }
-      await this.routeSdkMessageFromPump(message);
+      this.conceptInitMessage =
+        message.type === "system" && message.subtype === "init" ? message : null;
+      this.conceptPumpedMessage = message;
+      try {
+        await this.routeSdkMessageFromPump(message);
+      } finally {
+        this.conceptInitMessage = null;
+        this.conceptPumpedMessage = null;
+      }
       return false;
     };
     const drainActiveQuery = async (): Promise<boolean> => {
@@ -3886,6 +3942,7 @@ class ClaudeAgentSession implements AgentSession {
       }
     } finally {
       if (this.query === activeQuery) {
+        this.conceptObservation?.invalidate();
         this.query = null;
         this.input = null;
       }
@@ -3932,6 +3989,62 @@ class ClaudeAgentSession implements AgentSession {
     return this.isAssistantishMessage(message);
   }
 
+  private observeConceptEcho(message: SDKMessage, turnId: string | null) {
+    if (!this.conceptObservation || this.conceptPumpedMessage !== message) return;
+    if (readClaudeParentToolUseId(message)) {
+      this.conceptObservation.completion.invalidate();
+      return;
+    }
+    if (message.type !== "user") return;
+    this.conceptObservation.observeCompletion(
+      message as unknown as Record<string, unknown>,
+      turnId,
+    );
+    const echo = this.conceptObservation.completion.verifiedEcho();
+    if (!echo || echo.input_uuid !== message.uuid || echo.provider_turn_id !== turnId) return;
+    // Metadata echo enriches the already accepted canonical prompt without copying its text.
+    this.notifySubscribers({
+      type: "timeline",
+      provider: "claude",
+      turnId: echo.provider_turn_id,
+      item: {
+        type: "user_message",
+        text: "",
+        messageId: echo.input_uuid,
+        clientMessageId: echo.client_message_id,
+      },
+    });
+  }
+  private appendConceptResult(
+    message: SDKMessage,
+    turnId: string | null,
+    events: AgentStreamEvent[],
+  ) {
+    if (message.type === "result" && this.conceptPumpedMessage === message) {
+      const qualified = this.conceptObservation?.observeCompletion(
+        message as unknown as Record<string, unknown>,
+        turnId,
+      );
+      if (
+        qualified &&
+        !events.some(
+          (event) =>
+            event.type === "timeline" &&
+            event.item.type === "assistant_message" &&
+            event.item.messageId === qualified.metadata.final_message_id,
+        )
+      )
+        events.unshift({
+          type: "timeline",
+          provider: "claude",
+          item: {
+            type: "assistant_message",
+            text: qualified.text,
+            messageId: qualified.metadata.final_message_id,
+          },
+        });
+    }
+  }
   private async routeSdkMessageFromPump(message: SDKMessage): Promise<void> {
     if (this.shouldSuppressStaleResult(message)) {
       return;
@@ -3946,6 +4059,7 @@ class ClaudeAgentSession implements AgentSession {
     }
 
     const turnId = this.activeForegroundTurnId ?? this.autonomousTurn?.id ?? null;
+    this.observeConceptEcho(message, turnId);
     const identifiers = readEventIdentifiers(message);
     this.rememberTranscriptProgress(message, readTranscriptUuid(message));
 
@@ -3977,6 +4091,7 @@ class ClaudeAgentSession implements AgentSession {
       this.logger.debug("Suppressing stale Claude interrupt terminal result");
       return;
     }
+    this.appendConceptResult(message, turnId, events);
     if (
       events.some((event) => event.type === "timeline" && event.item.type === "assistant_message")
     ) {
@@ -4632,6 +4747,7 @@ class ClaudeAgentSession implements AgentSession {
     }
 
     const msgRecord = toObjectRecord(message) ?? {};
+    if (this.conceptInitMessage === message) this.conceptObservation?.initialized(msgRecord);
     const newSessionId = extractSessionIdRaw({
       session_id: msgRecord.session_id,
       sessionId: msgRecord.sessionId,

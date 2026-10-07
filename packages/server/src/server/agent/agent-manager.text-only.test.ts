@@ -199,3 +199,30 @@ test("ordinary Claude still receives native tools and normal creation hooks", as
     "agent.session_open",
   ]);
 });
+
+test("private exact observation preserves actual manager owner and mandatory creation guard", async () => {
+  const f = fixture();
+  const created = await f.manager.createAgent(config(), undefined, {
+    workspaceId: "synthetic-workspace",
+  });
+  const observed = await f.manager.observeConceptAgent(created.id);
+  expect(observed).toMatchObject({
+    id: created.id,
+    manager_generation: f.manager.conceptOwnerGeneration,
+    visible: true,
+    internal: false,
+    workspaceId: "synthetic-workspace",
+  });
+  expect(observed?.runtimeInfo).toBeNull(); // No actual native observation manufactured.
+  expect(f.before.mock.calls.map((call) => call[0])).toEqual([
+    "agent.create",
+    "agent.session_open",
+  ]);
+  const ordinary = await f.manager.createAgent(
+    { provider: "claude", cwd: process.cwd() },
+    undefined,
+    {},
+  );
+  expect(await f.manager.observeConceptAgent(ordinary.id)).toBeNull();
+  expect(await f.manager.observeConceptAgent("foreign")).toBeNull();
+});
