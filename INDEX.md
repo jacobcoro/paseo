@@ -17,3 +17,5 @@
 - [study/employee-concept-final.mjs](study/employee-concept-final.mjs): accepted-client-only selected visible final;
   [private artifact validation](study/employee-concept-final-artifact.mjs) and
   [same-daemon handoff](study/employee-concept-final-handoff.mjs) preserve separate metadata frames.
+- [private handoff module resolver](packages/server/src/server/agent/concept-handoff-module.ts):
+  exact source/emitted layouts; private study files must ship with the server release.

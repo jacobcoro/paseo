@@ -194,3 +194,9 @@ Its file bound includes JSON escaping overhead, while its UTF8 text bound stays
 64KiB. Shutdown/removal/revocation/failure writes unknown without text. The fixed
 external facade rechecks current owner, frame, Root records and artifact identity
 before returning it. This does not add a public endpoint or activate any runtime.
+
+The fixed private module resolver supports only the server source layout and its
+configured `dist/server/server/agent` emitted layout. Both select the same root
+`study/employee-concept-final-handoff.mjs`; unknown layouts deny. Private fork
+release packaging must keep these study files paired with the server release.
+This source path correction does not approve release or worker adoption.

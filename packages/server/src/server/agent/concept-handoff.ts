@@ -16,6 +16,7 @@ import type { AgentManager } from "./agent-manager.js";
 import type { AgentStorage, StoredAgentRecord } from "./agent-storage.js";
 import { assertClaudeTextOnlyConfig } from "./providers/claude/text-only.js";
 import { loadConceptHandoffConfig, privateDirectory } from "./concept-handoff-config.js";
+import { conceptFinalHandoffModuleUrl } from "./concept-handoff-module.js";
 
 function projectStored(before: StoredAgentRecord) {
   const config = before.config;
@@ -165,7 +166,7 @@ export function startConceptHandoff(input: {
     if (selected.finalText === "sdk-success-result") {
       try {
         const { selectedFinalForHandoff } = await import(
-          new URL("../../../../../study/employee-concept-final-handoff.mjs", import.meta.url).href
+          conceptFinalHandoffModuleUrl(new URL(import.meta.url)).href
         );
         final = await selectedFinalForHandoff(selected, {
           manager: input.manager,
