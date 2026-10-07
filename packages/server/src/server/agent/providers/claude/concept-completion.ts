@@ -57,7 +57,7 @@ export class ConceptCompletion {
   ) {
     const r = this.request;
     if (!r || this.ambiguous || !native || r.query !== query || r.turn !== turn) return null;
-    if (message.session_id !== native || message.parent_tool_use_id || message.isReplay === true) {
+    if (message.session_id !== native || forbiddenEcho(message)) {
       this.invalidate();
       return null;
     }
@@ -111,5 +111,14 @@ function successfulResult(message: Record<string, unknown>) {
     typeof message.result === "string" &&
     Boolean(message.result) &&
     Buffer.byteLength(message.result as string) <= 1048576
+  );
+}
+
+function forbiddenEcho(message: Record<string, unknown>) {
+  return (
+    message.parent_tool_use_id ||
+    message.subagent_type ||
+    message.tool_use_result !== undefined ||
+    ["isReplay", "isSynthetic", "isMeta"].some((key) => message[key] === true)
   );
 }

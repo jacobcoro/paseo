@@ -74,11 +74,34 @@ async function fixture(kind = "success") {
                 type: "user",
                 uuid: kind === "missingecho" ? "foreign" : inputUuid,
                 session_id: "native",
-                message: { content: [] },
+                parent_tool_use_id: null,
+                isSynthetic: kind === "synthetic",
+                isReplay: kind === "replay",
+                message: { role: "user", content: [] },
               },
             };
           }
-          if (stage === 3)
+          if (stage === 3 && ["streamed", "ordinary"].includes(kind))
+            return {
+              done: false,
+              value: {
+                type: "assistant",
+                uuid: "actual-assistant-uuid",
+                session_id: "native",
+                parent_tool_use_id: null,
+                message: {
+                  id: "actual-message",
+                  role: "assistant",
+                  model: "opus",
+                  type: "message",
+                  stop_reason: "end_turn",
+                  stop_sequence: null,
+                  usage: { input_tokens: 1, output_tokens: 1 },
+                  content: [{ type: "text", text: "STREAMED PREFIX" }],
+                },
+              },
+            };
+          if (stage === 3 || (stage === 4 && ["streamed", "ordinary"].includes(kind)))
             return {
               done: false,
               value: {
@@ -134,7 +157,7 @@ async function fixture(kind = "success") {
       cwd: process.cwd(),
       model: "opus",
       modeId: "default",
-      providerOptions: { textOnly: true },
+      providerOptions: kind === "ordinary" ? undefined : { textOnly: true },
     },
     undefined,
     { workspaceId: "synthetic-workspace" },
@@ -142,7 +165,7 @@ async function fixture(kind = "success") {
   try {
     await manager.runAgent(agent.id, "SECRET PROMPT", { clientMessageId: "actual-client-id" });
   } catch (error) {
-    if (kind === "success") throw error; // A positive fixture must actually complete.
+    if (["success", "streamed", "ordinary"].includes(kind)) throw error; // A positive fixture must actually complete.
   }
   const observe = () => manager.observeConceptAgent(agent.id);
   return {
@@ -162,7 +185,7 @@ async function fixture(kind = "success") {
   };
 }
 test("actual native echo/success yields exact committed epoch/cursor/turn/hash without hidden output", async () => {
-  const f = await fixture();
+  const f = await fixture("streamed");
   try {
     await vi.waitFor(async () => expect((await f.observe())?.committed_completion).not.toBeNull());
     const actual = await f.observe();
@@ -201,7 +224,7 @@ test("actual native echo/success yields exact committed epoch/cursor/turn/hash w
   }
 });
 test("real provider glue rejects missing native echo, is_error true, failed result and native drift", async () => {
-  for (const kind of ["missingecho", "iserror", "failed", "drift"]) {
+  for (const kind of ["missingecho", "iserror", "failed", "drift", "synthetic", "replay"]) {
     const f = await fixture(kind);
     try {
       expect((await f.observe())?.committed_completion).toBeNull();
@@ -242,5 +265,19 @@ test("competing input, canceled observation, old query, missing fields and sidec
     begin();
     c.observe("query", "native", echo, "turn");
     expect(c.observe("query", "native", changed, "turn")).toBeNull();
+  }
+});
+
+test("ordinary streamed session retains its rendering without sealed result projection", async () => {
+  const f = await fixture("ordinary");
+  try {
+    const texts = [...f.rows.values()]
+      .filter((row) => row.item.type === "assistant_message")
+      .map((row) => (row.item.type === "assistant_message" ? row.item.text : ""));
+    expect(texts).toContain("STREAMED PREFIX");
+    expect(texts).not.toContain("VISIBLE FINAL");
+    expect(await f.observe()).toBeNull();
+  } finally {
+    await f.close();
   }
 });

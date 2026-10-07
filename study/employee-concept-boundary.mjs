@@ -160,7 +160,6 @@ export const observeOwner = (...args) => call("observeOwner", args);
 export const verifyAdmission = (...args) => call("verifyAdmission", args);
 export const assertConceptCurrent = (...args) => call("assertConceptCurrent", args);
 export const assertConceptQuiescent = (...args) => call("assertConceptQuiescent", args);
-export const observeConceptTerminal = (...args) =>
-  call("observeConceptTerminal", "observeConceptCompletion", args);
+export const observeConceptTerminal = (...args) => call("observeConceptTerminal", args);
 
 export const observeConceptCompletion = (...args) => call("observeConceptCompletion", args);

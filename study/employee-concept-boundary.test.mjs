@@ -5,7 +5,12 @@ import { writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { fixture } from "./employee-concept-reader-fixture.mjs";
-import { createConceptBoundary } from "./employee-concept-boundary.mjs";
+import {
+  createConceptBoundary,
+  assertConceptQuiescent,
+  observeConceptTerminal,
+  observeConceptCompletion,
+} from "./employee-concept-boundary.mjs";
 function setup() {
   const f = fixture("11111111-1111-4111-8111-111111111111"),
     host = join(f.config.workspace, "..", "host");
@@ -62,6 +67,7 @@ function setup() {
     owner,
     frame,
     write,
+    spec: sha + ":" + path,
     make: () => createConceptBoundary(sha + ":" + path, () => now),
   };
 }
@@ -118,4 +124,20 @@ test("aggregate stop settlement cannot satisfy successful completion callback", 
       .make()
       .observeConceptCompletion(f.binding, { clientMessageId: "expected", turnId: "expected" }),
   );
+});
+
+test("exported host-only terminal and completion shims forward the exact two arguments", async () => {
+  const f = setup();
+  const previous = process.env.PASEO_CONCEPT_OBSERVATION_CONFIG;
+  process.env.PASEO_CONCEPT_OBSERVATION_CONFIG = f.spec;
+  try {
+    await assertConceptQuiescent(f.binding, f.revoked);
+    assert.equal((await observeConceptTerminal(f.binding, f.revoked)).delivery_terminal, true);
+    await assert.rejects(
+      observeConceptCompletion(f.binding, { clientMessageId: "expected", turnId: "expected" }),
+    );
+  } finally {
+    if (previous === undefined) delete process.env.PASEO_CONCEPT_OBSERVATION_CONFIG;
+    else process.env.PASEO_CONCEPT_OBSERVATION_CONFIG = previous;
+  }
 });
