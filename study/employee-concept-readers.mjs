@@ -1,6 +1,6 @@
 // ONE host-only adapter. Configure/instantiate outside every actor workspace.
 // No SDK connection, native query, endpoint discovery, credential read or registry writes.
-import { completionReader } from "./employee-concept-completion.mjs";
+import { readerApi } from "./employee-concept-reader-api.mjs";
 import { held } from "./employee-control.mjs";
 import { conceptBoundaryChecks, digest, same } from "./employee-concept-profile.mjs";
 import { readerRecords, assertReaderRows } from "./employee-concept-reader-records.mjs";
@@ -277,24 +277,16 @@ export function createConceptReaders(config, { manager, storage, liveOwner, now 
       ...time(),
     };
   }
-  return {
-    get brokerGeneration() {
-      return brokerGeneration();
-    },
-    authorize,
-    assertPrecreation,
-    observeOwner,
-    verifyAdmission,
-    assertConceptCurrent,
-    assertConceptQuiescent,
-    observeConceptTerminal,
-    observeConceptCompletion: completionReader(
-      actual,
-      checked,
-      records,
-      config,
-      now,
+  return readerApi(
+    {
+      authorize,
+      assertPrecreation,
+      observeOwner,
+      verifyAdmission,
       assertConceptCurrent,
-    ),
-  };
+      assertConceptQuiescent,
+      observeConceptTerminal,
+    },
+    { actual, checked, records, config, manager, now, brokerGeneration },
+  );
 }

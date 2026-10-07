@@ -14,3 +14,6 @@
   [daemon handoff](packages/server/src/server/agent/concept-handoff.ts) uses existing bootstrap objects, OFF by default.
 - [study/employee-concept-completion.mjs](study/employee-concept-completion.mjs): exact successful-result callback;
   [committed selector](packages/server/src/server/agent/concept-committed-completion.ts) refuses memory-only success.
+- [study/employee-concept-final.mjs](study/employee-concept-final.mjs): accepted-client-only selected visible final;
+  [private artifact validation](study/employee-concept-final-artifact.mjs) and
+  [same-daemon handoff](study/employee-concept-final-handoff.mjs) preserve separate metadata frames.

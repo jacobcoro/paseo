@@ -66,7 +66,11 @@ export function startConceptHandoff(input: {
   serverId: string;
   manager: Pick<
     AgentManager,
-    "conceptOwnerGeneration" | "getAgent" | "observeConceptAgent" | "subscribe"
+    | "conceptOwnerGeneration"
+    | "getAgent"
+    | "observeConceptAgent"
+    | "subscribe"
+    | "readConceptFinalText"
   >;
   storage: Pick<AgentStorage, "getCurrent">;
   now?: () => number;
@@ -121,7 +125,8 @@ export function startConceptHandoff(input: {
     owned();
     const temporary = join(config.outputDir, name + "." + randomUUID());
     const bytes = JSON.stringify(record);
-    if (Buffer.byteLength(bytes) > 65536) throw Error("Concept observation frame too large");
+    if (Buffer.byteLength(bytes) > (name.endsWith(".final.json") ? 458752 : 65536))
+      throw Error("Concept observation frame too large");
     const handle = openSync(temporary, "wx", 0o600);
     try {
       writeFileSync(handle, bytes);
@@ -138,12 +143,59 @@ export function startConceptHandoff(input: {
     }
   }
   function closed(id: string) {
+    write(conceptFrameName(id).replace(".json", ".final.json"), {
+      ...identity(),
+      kind: "actual-concept-selected-final",
+      id,
+      state: "unknown",
+    });
     write(conceptFrameName(id), {
       ...identity(),
       kind: "actual-concept-private-frame",
       id,
       state: "unknown",
     });
+  }
+  async function captureFinal(
+    selected: (typeof config.agents)[number],
+    after: StoredAgentRecord,
+    observation: NonNullable<Awaited<ReturnType<AgentManager["observeConceptAgent"]>>>,
+  ) {
+    let final = null;
+    if (selected.finalText === "sdk-success-result") {
+      try {
+        const { selectedFinalForHandoff } = await import(
+          new URL("../../../../../study/employee-concept-final-handoff.mjs", import.meta.url).href
+        );
+        final = await selectedFinalForHandoff(selected, {
+          manager: input.manager,
+          storage: input.storage,
+          liveOwner: identity,
+          now,
+        });
+      } catch {
+        final = null;
+      }
+      if (stopped) return false;
+      const fresh = await input.manager.observeConceptAgent(selected.id);
+      if (stopped) return false;
+      if (
+        JSON.stringify(input.storage.getCurrent(selected.id)) !== JSON.stringify(after) ||
+        JSON.stringify(fresh?.committed_completion) !==
+          JSON.stringify(observation.committed_completion)
+      ) {
+        closed(selected.id);
+        return false;
+      }
+      write(conceptFrameName(selected.id).replace(".json", ".final.json"), {
+        ...identity(),
+        kind: "actual-concept-selected-final",
+        id: selected.id,
+        state: final ? "current" : "unknown",
+        ...(final ? { final } : {}),
+      });
+    }
+    return !stopped;
   }
   async function capture() {
     if (stopped) return;
@@ -175,6 +227,7 @@ export function startConceptHandoff(input: {
           closed(selected.id);
           continue;
         }
+        if (!(await captureFinal(selected, after, observation))) continue;
         write(conceptFrameName(selected.id), {
           ...identity(),
           kind: "actual-concept-private-frame",

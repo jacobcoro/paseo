@@ -4,7 +4,13 @@ import { createHash } from "node:crypto";
 export interface ConceptHandoffConfig {
   target: { kind: "instance"; home: string };
   outputDir: string;
-  agents: { id: string; workspaceId: string; workspace: string; reader: Record<string, unknown> }[];
+  agents: {
+    id: string;
+    workspaceId: string;
+    workspace: string;
+    reader: Record<string, unknown>;
+    finalText?: "sdk-success-result";
+  }[];
 }
 export function privateDirectory(path: string, workspaces: string[]): void {
   const st = lstatSync(path);
@@ -63,7 +69,8 @@ function validateSelection(agents: ConceptHandoffConfig["agents"]) {
       !/^[a-f0-9-]{36}$/.test(agent.id) ||
       !agent.workspaceId ||
       !isAbsolute(agent.workspace) ||
-      !agent.reader
+      !agent.reader ||
+      (agent.finalText !== undefined && agent.finalText !== "sdk-success-result")
     )
       throw Error("Exact registered concept selection required");
   }

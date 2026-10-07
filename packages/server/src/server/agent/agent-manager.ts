@@ -1,4 +1,7 @@
-import { selectConceptCommittedCompletion } from "./concept-committed-completion.js";
+import {
+  selectConceptCommittedCompletion,
+  selectConceptVisibleFinal,
+} from "./concept-committed-completion.js";
 import type { ConceptCompletionMetadata } from "./providers/claude/concept-completion.js";
 import {
   assertClaudeTextOnlyConfig,
@@ -1229,6 +1232,31 @@ export class AgentManager {
       committed_completion: committedCompletion,
       observed_ms: Date.now(),
     });
+  }
+
+  // Private exact selected visible output. No timeline export or in-memory fallback.
+  async readConceptFinalText(
+    agentId: string,
+    completion: NonNullable<ReturnType<typeof selectConceptCommittedCompletion>>,
+  ) {
+    const before = await this.observeConceptAgent(agentId);
+    if (
+      !this.durableTimelineStore ||
+      !before ||
+      JSON.stringify(before.committed_completion) !== JSON.stringify(completion)
+    )
+      return null;
+    const rows = await this.durableTimelineStore.getCommittedRows(agentId);
+    const text = selectConceptVisibleFinal(rows, completion),
+      after = await this.observeConceptAgent(agentId);
+    if (
+      text === null ||
+      !after ||
+      before.manager_generation !== after.manager_generation ||
+      JSON.stringify(after.committed_completion) !== JSON.stringify(completion)
+    )
+      return null;
+    return { text, completion, manager_generation: after.manager_generation };
   }
 
   async waitForAgentClose(agentId: string): Promise<void> {

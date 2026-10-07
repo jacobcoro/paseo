@@ -178,3 +178,19 @@ registration and proof. This source does not initiate it.
 No actual owner, current loaded source, custody, ingress, PID birth, isolation,
 SDK extra-argument interpretation, approval or configured runtime is verified by
 these offline tests. Root owns adoption, enrollment and every live proof decision.
+
+`readConceptFinal(binding, { clientMessageId })` derives the actual provider turn
+from the matched accepted input. It never accepts a desired turn or timeline
+selector. The same manager reads only that exact durable final row, current
+epoch/cursor/result ID and UTF8 hash, with a 64KiB visible-text limit. Missing,
+uncommitted, revoked, stale, drifted or oversized data stays unknown.
+
+A Root-selected agent must also opt into `finalText: "sdk-success-result"` in the
+pinned host configuration. The existing private handoff then checks independent
+current admission and writes one separate `<hashed-id>.final.json` artifact.
+Observation frames remain metadata only. The artifact contains only the selected
+visible result, exact provenance and scope; no prompt, reasoning, tools or history.
+Its file bound includes JSON escaping overhead, while its UTF8 text bound stays
+64KiB. Shutdown/removal/revocation/failure writes unknown without text. The fixed
+external facade rechecks current owner, frame, Root records and artifact identity
+before returning it. This does not add a public endpoint or activate any runtime.

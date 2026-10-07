@@ -1,4 +1,5 @@
 // Host-only boundary module for the existing Hermes module loader. No network/SDK.
+import { selectedFinalArtifact } from "./employee-concept-final-artifact.mjs";
 import { createHash } from "node:crypto";
 import { readFileSync, lstatSync, realpathSync } from "node:fs";
 import { dirname } from "node:path";
@@ -113,6 +114,10 @@ export function createConceptBoundary(spec, now = Date.now) {
         get conceptOwnerGeneration() {
           return owner(selected).manager_generation;
         },
+        readConceptFinalText: async (exactId, completion) => {
+          if (exactId !== id || selected.finalText !== "sdk-success-result") held();
+          return selectedFinalArtifact(selected, completion, { frame, host, pin: match[1], now });
+        },
         observeConceptAgent: async (exactId) => {
           if (exactId !== id) held();
           return frame(selected).observation;
@@ -146,6 +151,7 @@ export function createConceptBoundary(spec, now = Date.now) {
       "assertConceptQuiescent",
       "observeConceptTerminal",
       "observeConceptCompletion",
+      "readConceptFinal",
     ].map((name) => [name, (...args) => reader(args[0])[name](...args)]),
   );
 }
@@ -163,3 +169,5 @@ export const assertConceptQuiescent = (...args) => call("assertConceptQuiescent"
 export const observeConceptTerminal = (...args) => call("observeConceptTerminal", args);
 
 export const observeConceptCompletion = (...args) => call("observeConceptCompletion", args);
+
+export const readConceptFinal = (...args) => call("readConceptFinal", args);

@@ -50,3 +50,26 @@ export function selectConceptCommittedCompletion(
     provenance: "sdk_success_result" as const,
   };
 }
+
+export function selectConceptVisibleFinal(
+  rows: AgentTimelineRow[],
+  completion: NonNullable<ReturnType<typeof selectConceptCommittedCompletion>>,
+) {
+  const matches = rows.filter(
+    (row) =>
+      row.seq === completion.cursor &&
+      row.turnId === completion.turn_id &&
+      row.item.type === "assistant_message" &&
+      row.item.messageId === completion.final_message_id,
+  );
+  if (matches.length !== 1 || matches[0].item.type !== "assistant_message") return null;
+  const text = matches[0].item.text,
+    bytes = Buffer.from(text, "utf8");
+  if (
+    bytes.length > 65536 ||
+    bytes.toString("utf8") !== text ||
+    createHash("sha256").update(bytes).digest("hex") !== completion.text_sha256
+  )
+    return null;
+  return text;
+}
