@@ -1,3 +1,4 @@
+import { conceptHandoffLifecycle } from "./agent/concept-handoff.js";
 import type { PluginRegistries } from "@getpaseo/protocol/plugin-registry";
 import { describeHookWorkspace } from "./plugins/lifecycle/index.js";
 import express from "express";
@@ -1593,6 +1594,13 @@ export async function createPaseoDaemon(
 
   logger.info({ elapsed: elapsed() }, "Bootstrap complete, ready to start listening");
 
+  const conceptHandoff = conceptHandoffLifecycle({
+    spec: process.env.PASEO_CONCEPT_OBSERVATION_CONFIG,
+    home: config.paseoHome,
+    serverId,
+    manager: agentManager,
+    storage: agentStorage,
+  });
   const start = async () => {
     let mainStarted = false;
     try {
@@ -1787,6 +1795,7 @@ export async function createPaseoDaemon(
       // model loading doesn't block the server from accepting connections.
       speechService.start();
       scriptHealthMonitor.start();
+      conceptHandoff.start();
     } catch (error) {
       localCredential = null;
       await deleteLocalCredential(config.paseoHome);
@@ -1803,6 +1812,11 @@ export async function createPaseoDaemon(
   };
 
   const stop = async () => {
+    await conceptHandoff
+      .stop()
+      .catch((error) =>
+        logger.warn({ error }, "Concept observation handoff closed with unknown cleanup"),
+      );
     localCredential = null;
     await deleteLocalCredential(config.paseoHome);
     // Stop tracking plugin provider registrations before anything tears plugins

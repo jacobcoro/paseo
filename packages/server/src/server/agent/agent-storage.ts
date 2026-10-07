@@ -121,6 +121,13 @@ export class AgentStorage {
     return Array.from(this.cache.values());
   }
 
+  // Host-only cache projection: never loads or enumerates another agent's records.
+  getCurrent(agentId: string): StoredAgentRecord | null {
+    if (!this.loaded || this.pendingWrites.has(agentId) || this.deleting.has(agentId)) return null;
+    const record = this.cache.get(agentId);
+    return record ? structuredClone(record) : null;
+  }
+
   async get(agentId: string): Promise<StoredAgentRecord | null> {
     await this.load();
     return this.cache.get(agentId) ?? null;
