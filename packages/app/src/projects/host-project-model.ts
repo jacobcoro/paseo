@@ -1,3 +1,4 @@
+import { compareLocalizedText, compareNaturalNames } from "@/utils/collation";
 import type { WorkspaceDescriptor } from "@/stores/session-store";
 import type {
   WorkspaceStructureHostPlacement,
@@ -152,14 +153,12 @@ function compareHostProjectsForServer(
   serverId: string,
 ): number {
   return (
-    left.projectName.localeCompare(right.projectName, undefined, {
-      numeric: true,
-      sensitivity: "base",
-    }) ||
-    (getHostProjectId(left, serverId) ?? "").localeCompare(
+    compareNaturalNames(left.projectName, right.projectName) ||
+    compareLocalizedText(
+      getHostProjectId(left, serverId) ?? "",
       getHostProjectId(right, serverId) ?? "",
     ) ||
-    left.viewKey.localeCompare(right.viewKey)
+    compareLocalizedText(left.viewKey, right.viewKey)
   );
 }
 

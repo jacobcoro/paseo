@@ -1,3 +1,4 @@
+import { compareLocalizedText, compareNaturalNames } from "@/utils/collation";
 import type { ProjectDescriptor, WorkspaceDescriptor } from "@/stores/session-store";
 import { projectDisplayNameFromProjectId } from "@/utils/project-display-name";
 
@@ -114,10 +115,8 @@ export function buildWorkspaceStructureProjects(input: {
     }))
     .sort(
       (left, right) =>
-        left.projectName.localeCompare(right.projectName, undefined, {
-          numeric: true,
-          sensitivity: "base",
-        }) || left.viewKey.localeCompare(right.viewKey),
+        compareNaturalNames(left.projectName, right.projectName) ||
+        compareLocalizedText(left.viewKey, right.viewKey),
     );
 }
 
@@ -207,10 +206,8 @@ function getOrCreate<K, V>(map: Map<K, V>, key: K, create: () => V): V {
 
 function compareWorkspaceStructureItems(left: WorkspaceSortItem, right: WorkspaceSortItem): number {
   return (
-    left.workspaceName.localeCompare(right.workspaceName, undefined, {
-      numeric: true,
-      sensitivity: "base",
-    }) || left.workspaceKey.localeCompare(right.workspaceKey)
+    compareNaturalNames(left.workspaceName, right.workspaceName) ||
+    compareLocalizedText(left.workspaceKey, right.workspaceKey)
   );
 }
 
@@ -227,5 +224,7 @@ function workspaceSortTime(
 }
 
 function compareWorkspaceTimes(left: WorkspaceSortItem, right: WorkspaceSortItem): number {
-  return right.sortTime - left.sortTime || left.workspaceKey.localeCompare(right.workspaceKey);
+  return (
+    right.sortTime - left.sortTime || compareLocalizedText(left.workspaceKey, right.workspaceKey)
+  );
 }

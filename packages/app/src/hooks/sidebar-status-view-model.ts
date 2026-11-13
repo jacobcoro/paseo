@@ -1,3 +1,4 @@
+import { compareLocalizedText } from "@/utils/collation";
 import type { TFunction } from "i18next";
 import { STATUS_BUCKET_ORDER } from "@/utils/sidebar-agent-state";
 import type { SidebarWorkspaceEntry } from "@/hooks/sidebar-workspaces-view-model";
@@ -72,13 +73,13 @@ function compareStatusRows(
 
   const aProject = projectNamesByViewKey.get(a.projectViewKey) ?? "";
   const bProject = projectNamesByViewKey.get(b.projectViewKey) ?? "";
-  const projectCmp = aProject.localeCompare(bProject);
+  const projectCmp = compareLocalizedText(aProject, bProject);
   if (projectCmp !== 0) return projectCmp;
 
-  const nameCmp = a.name.localeCompare(b.name);
+  const nameCmp = compareLocalizedText(a.name, b.name);
   if (nameCmp !== 0) return nameCmp;
 
-  return a.workspaceKey.localeCompare(b.workspaceKey);
+  return compareLocalizedText(a.workspaceKey, b.workspaceKey);
 }
 
 export function buildStatusShortcutIndex(groups: StatusGroup[]): Map<string, number> {

@@ -1,3 +1,4 @@
+import { compareLocalizedText } from "@/utils/collation";
 import { useMemo, useRef } from "react";
 import { shallow } from "zustand/shallow";
 import { useStoreWithEqualityFn } from "zustand/traditional";
@@ -134,7 +135,8 @@ export function splitPinnedSidebarGroups(input: {
   }
 
   pinnedChats.sort((a, b) =>
-    (keys.pinnedAtByKey[b.workspaceKey] ?? "").localeCompare(
+    compareLocalizedText(
+      keys.pinnedAtByKey[b.workspaceKey] ?? "",
       keys.pinnedAtByKey[a.workspaceKey] ?? "",
     ),
   );
