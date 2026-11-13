@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { ProjectDescriptor, WorkspaceDescriptor } from "@/stores/session-store";
 import { buildWorkspaceStructureProjects, createProjectViewKey } from "./workspace-structure";
 
@@ -223,4 +223,30 @@ test("time ties use workspace identity so renaming cannot move Created rows", ()
   expect(
     buildWorkspaceStructureProjects({ sessions, workspaceSort: "created" })[0].workspaceKeys,
   ).toEqual(["h:a", "h:b"]);
+});
+
+test("large workspace update bursts avoid per-comparison locale construction", () => {
+  // Hermes constructs a Java ICU Collator for each String.localeCompare call.
+  const localeCompare = vi.spyOn(String.prototype, "localeCompare");
+  try {
+    const workspaces = Array.from({ length: 200 }, (_, index) => ({
+      ...workspace(`ws-${index}`, "project", "/app"),
+      name: `Workspace ${200 - index}`,
+    }));
+    const sessions = [
+      {
+        serverId: "host",
+        projects: [project({ id: "project", key: null, root: "/app" })],
+        workspaces,
+      },
+    ];
+    for (let update = 0; update < 20; update += 1) {
+      const result = buildWorkspaceStructureProjects({ sessions });
+      expect(result[0].workspaceKeys[0]).toBe("host:ws-199");
+      expect(result[0].workspaceKeys[199]).toBe("host:ws-0");
+    }
+    expect(localeCompare).not.toHaveBeenCalled();
+  } finally {
+    localeCompare.mockRestore();
+  }
 });

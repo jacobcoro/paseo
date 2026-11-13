@@ -1,3 +1,4 @@
+import { compareLocalizedText } from "@/utils/collation";
 import type { ProjectDescriptor, WorkspaceDescriptor } from "@/stores/session-store";
 import type { HostProjectListItem } from "@/projects/host-project-model";
 import { buildWorkspaceStructureProjects } from "@/projects/workspace-structure";
@@ -189,11 +190,11 @@ function toHostEntry(group: HostGroup): ProjectHostEntry {
 }
 
 function compareHosts(left: ProjectHostEntry, right: ProjectHostEntry): number {
-  const name = left.serverName.localeCompare(right.serverName);
+  const name = compareLocalizedText(left.serverName, right.serverName);
   if (name !== 0) {
     return name;
   }
-  return left.serverId.localeCompare(right.serverId);
+  return compareLocalizedText(left.serverId, right.serverId);
 }
 
 function toProjectSummary(draft: ProjectGroup): ProjectSummary {
@@ -289,11 +290,11 @@ export function buildProjects(input: BuildProjectsInput): BuildProjectsResult {
 
   const projects = Array.from(groups.values()).map(toProjectSummary);
   projects.sort((left, right) => {
-    const name = left.projectName.localeCompare(right.projectName);
+    const name = compareLocalizedText(left.projectName, right.projectName);
     if (name !== 0) {
       return name;
     }
-    return left.viewKey.localeCompare(right.viewKey);
+    return compareLocalizedText(left.viewKey, right.viewKey);
   });
 
   return { projects };
