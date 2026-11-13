@@ -2970,39 +2970,53 @@ index b98d10c..b645629 100644
  @end
 diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/MeasurementSizeCache.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/MeasurementSizeCache.kt
 new file mode 100644
-index 0000000..11911c8
+index 0000000..e2181ea
 --- /dev/null
 +++ b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/MeasurementSizeCache.kt
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,45 @@
 +package com.swmansion.enriched.markdown
 +
 +/** Size-only cache: no views, spans, Contexts or callbacks survive unmount. */
-+internal class MeasurementSizeCache(private val capacity: Int = 512) {
++internal class MeasurementSizeCache(
++  private val capacity: Int = 512,
++  private val maxMarkdownBytes: Long = 4L * 1024 * 1024,
++) {
 +  data class Key(val markdown: String, val propsHash: Int, val width: Float, val splitTableSegments: Boolean)
 +
 +  private val sizes = LinkedHashMap<Key, Long>(16, 0.75f, true)
++  private var markdownBytes = 0L
 +
 +  @Synchronized
 +  fun get(key: Key): Long? = sizes[key]
 +
 +  @Synchronized
 +  fun put(key: Key, size: Long) {
-+    sizes[key] = size
-+    if (sizes.size > capacity) {
-+      val oldest = sizes.entries.iterator()
-+      oldest.next()
++    val keyBytes = key.markdown.length.toLong() * 2
++    if (capacity == 0 || keyBytes > maxMarkdownBytes) return
++    if (sizes.put(key, size) == null) markdownBytes += keyBytes
++    // Streaming revisions retain distinct source strings even when the entry count stays small.
++    val oldest = sizes.entries.iterator()
++    while (sizes.size > capacity || markdownBytes > maxMarkdownBytes) {
++      markdownBytes -= oldest.next().key.markdown.length.toLong() * 2
 +      oldest.remove()
 +    }
 +  }
 +
 +  @Synchronized
 +  fun removeMatchingMarkdown(markdown: String) {
-+    sizes.keys.removeAll { it.markdown == markdown }
++    val entries = sizes.entries.iterator()
++    while (entries.hasNext()) {
++      if (entries.next().key.markdown == markdown) {
++        markdownBytes -= markdown.length.toLong() * 2
++        entries.remove()
++      }
++    }
 +  }
 +
 +  @Synchronized
 +  fun clear() {
 +    sizes.clear()
++    markdownBytes = 0L
 +  }
 +}
 diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/MeasurementStore.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/MeasurementStore.kt
@@ -3137,10 +3151,10 @@ index f4840e4..e36b444 100644
    }
 diff --git a/node_modules/react-native-enriched-markdown/android/src/test/java/com/swmansion/enriched/markdown/MeasurementSizeCacheTest.kt b/node_modules/react-native-enriched-markdown/android/src/test/java/com/swmansion/enriched/markdown/MeasurementSizeCacheTest.kt
 new file mode 100644
-index 0000000..b3394c4
+index 0000000..743950e
 --- /dev/null
 +++ b/node_modules/react-native-enriched-markdown/android/src/test/java/com/swmansion/enriched/markdown/MeasurementSizeCacheTest.kt
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,83 @@
 +package com.swmansion.enriched.markdown
 +
 +import org.junit.Assert.*
@@ -3190,6 +3204,38 @@ index 0000000..b3394c4
 +    assertEquals(4L, cache.get(key("other")))
 +    cache.clear()
 +    assertNull(cache.get(key("other")))
++  }
++  @Test fun evictsLongStreamingRevisionsBeforeTheEntryLimit() {
++    val cache = MeasurementSizeCache(capacity = 512, maxMarkdownBytes = 16L)
++    cache.put(key("first"), 1L)
++    cache.put(key("second"), 2L)
++    assertNull(cache.get(key("first")))
++    assertEquals(2L, cache.get(key("second")))
++  }
++
++  @Test fun oversizedMessagesDoNotDisplaceReusableSmallMeasurements() {
++    val cache = MeasurementSizeCache(capacity = 512, maxMarkdownBytes = 16L)
++    cache.put(key("small"), 1L)
++    cache.put(key("a much larger message"), 2L)
++    assertEquals(1L, cache.get(key("small")))
++    assertNull(cache.get(key("a much larger message")))
++  }
++
++  @Test fun replacementAndInvalidationReleaseTheTextBudget() {
++    val cache = MeasurementSizeCache(capacity = 512, maxMarkdownBytes = 16L)
++    cache.put(key("one"), 1L)
++    cache.put(key("one"), 2L)
++    cache.put(key("two"), 3L)
++    assertEquals(2L, cache.get(key("one")))
++    cache.removeMatchingMarkdown("one")
++    cache.put(key("three"), 4L)
++    assertEquals(3L, cache.get(key("two")))
++    assertEquals(4L, cache.get(key("three")))
++    cache.clear()
++    cache.put(key("four"), 5L)
++    cache.put(key("five"), 6L)
++    assertEquals(5L, cache.get(key("four")))
++    assertEquals(6L, cache.get(key("five")))
 +  }
 +}
 diff --git a/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/MarkdownRenderDispatch.kt b/node_modules/react-native-enriched-markdown/android/src/main/java/com/swmansion/enriched/markdown/MarkdownRenderDispatch.kt
